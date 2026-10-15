@@ -1248,6 +1248,23 @@ RtResultVoid Class::setup_field_layout(metadata::RtClass* klass)
     }
     klass->alignment = static_cast<uint8_t>(instanceSizeAndAlignment.alignment);
 
+    // CoreLib reads array payloads through `Unsafe.As<RawArrayData>(array).Data` (Array bounds, GenericCache, ...).
+    // CoreLib's RawArrayData is {uint Length; [uint Padding on 64-bit]; byte Data}, i.e. Data at +4 on 32-bit, but LeanCLR's
+    // RtArray keeps {int32 length; uint32 padding; uint64 first_data} on every target. Pin Data to RtArray::first_data so the
+    // managed view matches the real object on 32-bit (a no-op on 64-bit, where both are +8).
+    if (klass->namespaze != nullptr && klass->name != nullptr && std::strcmp(klass->name, "RawArrayData") == 0 &&
+        std::strcmp(klass->namespaze, "System.Runtime.CompilerServices") == 0)
+    {
+        for (uint16_t i = 0; i < klass->field_count; ++i)
+        {
+            metadata::RtFieldInfo* field = const_cast<metadata::RtFieldInfo*>(klass->fields + i);
+            if (Field::is_instance(field) && std::strcmp(field->name, "Data") == 0)
+            {
+                field->offset = static_cast<uint32_t>(offsetof(RtArray, first_data) - RT_OBJECT_HEADER_SIZE);
+            }
+        }
+    }
+
     DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(metadata::SizeAndAlignment, staticSizeAndAlignment, metadata::Layout::compute_layout(staticFields, 0, 0));
     klass->static_size = staticSizeAndAlignment.size;
     RET_VOID_OK();

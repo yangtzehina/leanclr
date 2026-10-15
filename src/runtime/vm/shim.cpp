@@ -1,4 +1,8 @@
 #include "shim.h"
+#include "interp/machine_state.h"
+#include <cstdio>
+#include <cstdlib>
+#include "field.h"
 #include "method.h"
 #include "rt_array.h"
 #include "class.h"
@@ -105,12 +109,26 @@ RtResultVoid fn_pinvoke_invoker(metadata::RtManagedMethodPointer method_pointer,
     RETURN_NOT_IMPLEMENTED_ERROR();
 }
 
+static void spike_dump_frames(const char* why)
+{
+    if (std::getenv("LEANCLR_THROW_TRACE") == nullptr)
+        return;
+    std::fprintf(stderr, "leanclr-%s\n", why);
+    auto frames = interp::MachineState::get_global_machine_state().get_active_frames();
+    for (size_t i = frames.size(); i-- > 0 && frames.size() - i <= 24;)
+    {
+        const metadata::RtMethodInfo* m = frames[i].method;
+        std::fprintf(stderr, "    at %s.%s::%s\n", m && m->parent ? m->parent->namespaze : "?", m && m->parent ? m->parent->name : "?", m ? m->name : "?");
+    }
+}
+
 // Not implemented PInvoke invoker
 RtResultVoid fn_not_implemented_pinvoke_invoker(metadata::RtManagedMethodPointer method_pointer, const metadata::RtMethodInfo* method,
                                                 const interp::RtStackObject* params, interp::RtStackObject* ret) noexcept
 {
     printf("P/Invoke invoker not implemented for method: %s.%s::%s token:0x%0x\n", method->parent->namespaze, method->parent->name, method->name,
            method->token);
+    spike_dump_frames("pinvoke-not-implemented");
     RETURN_NOT_IMPLEMENTED_ERROR();
 }
 
@@ -276,6 +294,117 @@ static metadata::RtInvokeMethodPointer try_setup_array_or_szarray_invoke(const m
 }
 
 // Get invoker for a method
+// ---- 32-bit QCall argument widening (wasm32 / arm32) ----------------------------------------------------------
+// The hand-written CoreCLR QCall invokers (pinvokes/coreclr_qcall.cpp, ~600 get_param sites) index their arguments as
+// if every pointer-sized field of a struct argument owned its own 8-byte eval-stack slot. That holds on 64-bit
+// (QCallTypeHandle {void* _ptr; nint _handle} = 16 bytes = 2 slots) but not on 32-bit, where the same struct is 8 bytes
+// = 1 slot and every later index is shifted. Instead of rewriting each invoker, re-lay the arguments into the 64-bit
+// shape: a value-type argument made only of pointer-sized fields gets one zero-extended slot per field.
+static bool is_pointer_sized_field_sig(const metadata::RtTypeSig* t)
+{
+    if (t->is_by_ref())
+        return true;
+    switch (t->ele_type)
+    {
+    case metadata::RtElementType::I:
+    case metadata::RtElementType::U:
+    case metadata::RtElementType::Ptr:
+    case metadata::RtElementType::FnPtr:
+    case metadata::RtElementType::Class:
+    case metadata::RtElementType::Object:
+    case metadata::RtElementType::String:
+    case metadata::RtElementType::SZArray:
+    case metadata::RtElementType::Array:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// number of pointer-sized instance fields if the struct is made only of them (and has >= 2), else 0
+static uint32_t pointer_struct_field_count(const metadata::RtTypeSig* t)
+{
+    if (t->is_by_ref() || (t->ele_type != metadata::RtElementType::ValueType && t->ele_type != metadata::RtElementType::GenericInst))
+        return 0;
+    auto kr = Class::get_class_from_typesig(t);
+    if (kr.is_err())
+        return 0;
+    metadata::RtClass* klass = kr.unwrap();
+    if (!Class::is_value_type(klass) || Class::is_enum_type(klass))
+        return 0;
+    if (Class::initialize_fields(klass).is_err())
+        return 0;
+    uint32_t n = 0;
+    for (uint16_t i = 0; i < klass->field_count; ++i)
+    {
+        const metadata::RtFieldInfo* f = &klass->fields[i];
+        if (Field::is_static_included_literal_and_rva(f))
+            continue;
+        if (!is_pointer_sized_field_sig(f->type_sig))
+            return 0;
+        ++n;
+    }
+    return n >= 2 ? n : 0;
+}
+
+struct Widen32Plan
+{
+    metadata::RtInvokeMethodPointer inner;
+    bool needed;
+};
+static utils::HashMap<const metadata::RtMethodInfo*, Widen32Plan> s_widen32_plans;
+
+static RtResultVoid fn_pinvoke_widen32_invoker(metadata::RtManagedMethodPointer method_pointer, const metadata::RtMethodInfo* method,
+                                               const interp::RtStackObject* params, interp::RtStackObject* ret) noexcept
+{
+    const Widen32Plan& plan = s_widen32_plans[method];
+    if (!plan.needed)
+        return plan.inner(method_pointer, method, params, ret);
+    interp::RtStackObject widened[64];
+    size_t out = 0;
+    size_t in = 0;
+    for (uint16_t i = 0; i < method->parameter_count; ++i)
+    {
+        const metadata::RtTypeSig* t = method->parameters[i];
+        uint32_t nf = pointer_struct_field_count(t);
+        size_t slots = method->arg_descs != nullptr ? method->arg_descs[i].stack_object_size : 1;
+        if (nf != 0)
+        {
+            const uint32_t* src = reinterpret_cast<const uint32_t*>(params + in);
+            for (uint32_t k = 0; k < nf && out < 64; ++k)
+            {
+                widened[out++].value = static_cast<uint64_t>(src[k]);
+            }
+        }
+        else
+        {
+            for (size_t k = 0; k < slots && out < 64; ++k)
+                widened[out++] = params[in + k];
+        }
+        in += slots;
+    }
+    return plan.inner(method_pointer, method, widened, ret);
+}
+
+static metadata::RtInvokeMethodPointer maybe_widen32(const metadata::RtMethodInfo* method, metadata::RtInvokeMethodPointer inner)
+{
+    if (sizeof(void*) != 4 || inner == nullptr)
+        return inner;
+    bool needed = false;
+    for (uint16_t i = 0; i < method->parameter_count; ++i)
+    {
+        if (pointer_struct_field_count(method->parameters[i]) != 0)
+        {
+            needed = true;
+            break;
+        }
+    }
+    if (!needed)
+        return inner;
+    s_widen32_plans[method] = Widen32Plan{inner, true};
+    return fn_pinvoke_widen32_invoker;
+}
+
 RtResult<InvokeTypeAndMethod> Shim::get_invoker(const metadata::RtMethodInfo* method)
 {
     const metadata::RtClass* klass = method->parent;
@@ -297,7 +426,7 @@ RtResult<InvokeTypeAndMethod> Shim::get_invoker(const metadata::RtMethodInfo* me
         DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL3(const PInvokeRegistry*, entry, PInvokes::get_pinvoke_by_method(method));
         if (entry)
         {
-            RET_OK(InvokeTypeAndMethod(RtInvokerType::PInvoke, entry->invoker));
+            RET_OK(InvokeTypeAndMethod(RtInvokerType::PInvoke, maybe_widen32(method, entry->invoker)));
         }
 
         RET_OK(InvokeTypeAndMethod(RtInvokerType::PInvoke, fn_not_implemented_pinvoke_invoker));
@@ -348,7 +477,7 @@ RtResult<InvokeTypeAndMethod> Shim::get_invoker(const metadata::RtMethodInfo* me
             DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL3(const PInvokeRegistry*, entry, PInvokes::get_pinvoke_by_method(method));
             if (entry)
             {
-                RET_OK(InvokeTypeAndMethod(RtInvokerType::PInvoke, entry->invoker));
+                RET_OK(InvokeTypeAndMethod(RtInvokerType::PInvoke, maybe_widen32(method, entry->invoker)));
             }
             else
             {

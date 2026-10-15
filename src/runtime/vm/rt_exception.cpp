@@ -190,6 +190,18 @@ static void prepare_exception_info(RtException* ex, interp::InterpFrame* frame, 
 
 RtException* Exception::raise_exception(RtException* ex, interp::InterpFrame* frame, const void* ip)
 {
+    static const bool s_throw_trace = std::getenv("LEANCLR_THROW_TRACE") != nullptr;
+    if (s_throw_trace)
+    {
+        // spike debugging aid: managed throw site + interpreter frame stack
+        std::fprintf(stderr, "leanclr-throw: %s.%s\n", ex->klass->namespaze, ex->klass->name);
+        auto frames = interp::MachineState::get_global_machine_state().get_active_frames();
+        for (size_t i = frames.size(); i-- > 0 && frames.size() - i <= 24;)
+        {
+            const metadata::RtMethodInfo* m = frames[i].method;
+            std::fprintf(stderr, "    at %s.%s::%s\n", m && m->parent ? m->parent->namespaze : "?", m && m->parent ? m->parent->name : "?", m ? m->name : "?");
+        }
+    }
     prepare_exception_info(ex, frame, ip);
     set_current_exception(ex);
     return ex;

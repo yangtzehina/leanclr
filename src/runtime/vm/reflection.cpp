@@ -237,17 +237,47 @@ struct Net10MethodTableAuxiliaryData
     uint32_t flags;
     void* loader_module;
     intptr_t exposed_class_object_raw;
+    // .NET 11 inserts `int CachedVersionResilientHashCode` after Flags, which moves ExposedClassObjectRaw from 0x08 to 0x0C on
+    // 32-bit (64-bit stays 0x10 thanks to padding). Keep room so the CoreLib-derived offset below always lands inside the block.
+    uint8_t reserved_tail[16];
 };
 
+// Offset of ExposedClassObjectRaw as the loaded CoreLib lays out MethodTableAuxiliaryData (computed by LeanCLR's own field
+// layout from CoreLib metadata), instead of a hard-coded constant that differs between 32/64-bit and between .NET 10 and 11.
+static size_t net10_aux_exposed_class_object_offset()
+{
+    static size_t s_offset = static_cast<size_t>(-1);
+    if (s_offset != static_cast<size_t>(-1))
+        return s_offset;
+    s_offset = offsetof(Net10MethodTableAuxiliaryData, exposed_class_object_raw);
+    metadata::RtAssembly* corlib = Assembly::get_corlib();
+    if (corlib != nullptr)
+    {
+        auto kr = corlib->mod->get_class_by_nested_full_name("System.Runtime.CompilerServices.MethodTableAuxiliaryData", false, true);
+        if (kr.is_ok() && kr.unwrap() != nullptr)
+        {
+            auto fr = Field::find_field_by_name(kr.unwrap(), "ExposedClassObjectRaw");
+            if (fr.is_ok() && fr.unwrap() != nullptr && fr.unwrap()->offset + sizeof(intptr_t) <= sizeof(Net10MethodTableAuxiliaryData))
+                s_offset = fr.unwrap()->offset;
+        }
+    }
+    return s_offset;
+}
+
+// CoreLib's MethodTable offsets (System.Runtime.CompilerServices.MethodTable, explicit layout) depend on TARGET_64BIT:
+//   64-bit: Parent 0x10, Aux 0x20, ElementType 0x30, InterfaceMap 0x38; Aux.ExposedClassObjectRaw 0x10
+//   32-bit (linux-arm / browser-wasm CoreLib): Parent 0x10, Aux 0x18, ElementType 0x20, InterfaceMap 0x24; Aux.ExposedClassObjectRaw 0x08
+// The facade's natural layout yields both; the CoreLib being run must match the host pointer size.
+#define LEANCLR_MT_OFF(o64, o32) (sizeof(void*) == 8 ? (o64) : (o32))
 static_assert(offsetof(Net10MethodTableFacade, parent_method_table) == 0x10,
               "net10 MethodTable facade must expose ParentMethodTable at CoreLib's expected offset");
-static_assert(offsetof(Net10MethodTableFacade, auxiliary_data) == 0x20,
+static_assert(offsetof(Net10MethodTableFacade, auxiliary_data) == LEANCLR_MT_OFF(0x20, 0x18),
               "net10 MethodTable facade must expose AuxiliaryData at CoreLib's expected offset");
-static_assert(offsetof(Net10MethodTableFacade, element_method_table) == 0x30,
+static_assert(offsetof(Net10MethodTableFacade, element_method_table) == LEANCLR_MT_OFF(0x30, 0x20),
               "net10 MethodTable facade must expose ElementType at CoreLib's expected offset");
-static_assert(offsetof(Net10MethodTableFacade, reserved_interface_map) == 0x38,
+static_assert(offsetof(Net10MethodTableFacade, reserved_interface_map) == LEANCLR_MT_OFF(0x38, 0x24),
               "net10 MethodTable facade must preserve CoreLib's InterfaceMap offset");
-static_assert(offsetof(Net10MethodTableAuxiliaryData, exposed_class_object_raw) == 0x10,
+static_assert(offsetof(Net10MethodTableAuxiliaryData, exposed_class_object_raw) == LEANCLR_MT_OFF(0x10, 0x08),
               "net10 MethodTable auxiliary data must expose ExposedClassObjectRaw at CoreLib's expected offset");
 
 static utils::HashMap<const metadata::RtTypeSig*, Net10MethodTableFacade*> s_net10_method_table_by_type_sig;
@@ -1238,7 +1268,8 @@ RtResult<RtReflectionType*> Reflection::get_type_reflection_object(const metadat
         ref_obj = inserted.first->second;
     }
     auto method_table = reinterpret_cast<Net10MethodTableFacade*>(const_cast<metadata::RtTypeSig*>(net10_type_handle));
-    method_table->auxiliary_data->exposed_class_object_raw = reinterpret_cast<intptr_t>(ref_obj);
+    *reinterpret_cast<intptr_t*>(reinterpret_cast<uint8_t*>(method_table->auxiliary_data) + net10_aux_exposed_class_object_offset()) =
+        reinterpret_cast<intptr_t>(ref_obj);
     if (identity_klass != nullptr)
     {
         s_klass_reflection_type_map.emplace(identity_klass, inserted.first->second);

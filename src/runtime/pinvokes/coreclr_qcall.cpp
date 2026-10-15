@@ -1,3 +1,6 @@
+#include <ctime>
+#include <cstdlib>
+#include <time.h>
 #include "coreclr_qcall.h"
 
 #include <cstdio>
@@ -4864,6 +4867,97 @@ RtResultVoid runtime_type_handle_get_module_slow_invoker(metadata::RtManagedMeth
     RET_VOID_OK();
 }
 
+// SPIKE-WASM: minimal libSystem.Native (Linux / browser CoreLibs call it where the Windows CoreLib calls kernel32/bcrypt).
+static uint64_t s_spike_rng = 0x9E3779B97F4A7C15ull;
+static void spike_fill_random(uint8_t* buf, int32_t n)
+{
+    for (int32_t i = 0; i < n; ++i)
+    {
+        s_spike_rng ^= s_spike_rng << 13; s_spike_rng ^= s_spike_rng >> 7; s_spike_rng ^= s_spike_rng << 17;
+        buf[i] = static_cast<uint8_t>(s_spike_rng >> 24);
+    }
+}
+RtResultVoid spike_sys_random_bytes_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject* params,
+                                            interp::RtStackObject*) noexcept
+{
+    spike_fill_random(interp::EvalStackOp::get_param<uint8_t*>(params, 0), interp::EvalStackOp::get_param<int32_t>(params, 1));
+    RET_VOID_OK();
+}
+RtResultVoid spike_sys_crypto_random_bytes_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject* params,
+                                                   interp::RtStackObject* ret) noexcept
+{
+    spike_fill_random(interp::EvalStackOp::get_param<uint8_t*>(params, 0), interp::EvalStackOp::get_param<int32_t>(params, 1));
+    if (ret != nullptr) ret->value = 0;  // 0 = success
+    RET_VOID_OK();
+}
+static int64_t spike_now_ns(clockid_t c) { struct timespec ts; clock_gettime(c, &ts); return static_cast<int64_t>(ts.tv_sec) * 1000000000LL + ts.tv_nsec; }
+RtResultVoid spike_sys_get_timestamp_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject*,
+                                             interp::RtStackObject* ret) noexcept
+{
+    interp::EvalStackOp::set_return(ret, spike_now_ns(CLOCK_MONOTONIC));  // Stopwatch.Frequency on Unix = 1e9
+    RET_VOID_OK();
+}
+RtResultVoid spike_sys_low_res_timestamp_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject*,
+                                                 interp::RtStackObject* ret) noexcept
+{
+    interp::EvalStackOp::set_return(ret, spike_now_ns(CLOCK_MONOTONIC) / 1000000LL);
+    RET_VOID_OK();
+}
+RtResultVoid spike_sys_system_time_ticks_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject*,
+                                                 interp::RtStackObject* ret) noexcept
+{
+    interp::EvalStackOp::set_return(ret, spike_now_ns(CLOCK_REALTIME) / 100LL + 621355968000000000LL);
+    RET_VOID_OK();
+}
+RtResultVoid spike_sys_malloc_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject* params,
+                                      interp::RtStackObject* ret) noexcept
+{
+    interp::EvalStackOp::set_return(ret, std::malloc(interp::EvalStackOp::get_param<size_t>(params, 0)));
+    RET_VOID_OK();
+}
+RtResultVoid spike_sys_calloc_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject* params,
+                                      interp::RtStackObject* ret) noexcept
+{
+    interp::EvalStackOp::set_return(ret, std::calloc(interp::EvalStackOp::get_param<size_t>(params, 0), interp::EvalStackOp::get_param<size_t>(params, 1)));
+    RET_VOID_OK();
+}
+RtResultVoid spike_sys_realloc_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject* params,
+                                       interp::RtStackObject* ret) noexcept
+{
+    interp::EvalStackOp::set_return(ret, std::realloc(interp::EvalStackOp::get_param<void*>(params, 0), interp::EvalStackOp::get_param<size_t>(params, 1)));
+    RET_VOID_OK();
+}
+RtResultVoid spike_sys_free_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject* params,
+                                    interp::RtStackObject*) noexcept
+{
+    std::free(interp::EvalStackOp::get_param<void*>(params, 0));
+    RET_VOID_OK();
+}
+RtResultVoid spike_sys_aligned_alloc_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject* params,
+                                             interp::RtStackObject* ret) noexcept
+{
+    size_t alignment = interp::EvalStackOp::get_param<size_t>(params, 0), size = interp::EvalStackOp::get_param<size_t>(params, 1);
+    void* p = nullptr;
+    if (posix_memalign(&p, alignment < sizeof(void*) ? sizeof(void*) : alignment, size) != 0) p = nullptr;
+    interp::EvalStackOp::set_return(ret, p);
+    RET_VOID_OK();
+}
+RtResultVoid spike_sys_minus_one_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject*,
+                                         interp::RtStackObject* ret) noexcept
+{
+    if (ret != nullptr) ret->value = static_cast<uint64_t>(-1LL);
+    RET_VOID_OK();
+}
+
+// SPIKE-WASM: generic "returns 0 / null / false" QCall
+RtResultVoid spike_return_zero_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject*,
+                                       interp::RtStackObject* ret) noexcept
+{
+    if (ret != nullptr)
+        ret->value = 0;
+    RET_VOID_OK();
+}
+
 RtResultVoid runtime_type_handle_get_instantiation_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*,
                                                            const interp::RtStackObject* params, interp::RtStackObject*) noexcept
 {
@@ -6382,6 +6476,37 @@ void register_coreclr_qcall_pinvokes() noexcept
     vm::PInvokes::register_pinvoke("Interop/Kernel32::SetLastError", nullptr, kernel32_set_last_error_invoker);
     vm::PInvokes::register_pinvoke("Kernel32::SetLastError(System.Int32)", nullptr, kernel32_set_last_error_invoker);
     vm::PInvokes::register_pinvoke("Kernel32::SetLastError", nullptr, kernel32_set_last_error_invoker);
+    // SPIKE-WASM: libSystem.Native subset
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetNonCryptographicallySecureRandomBytes", nullptr, spike_sys_random_bytes_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetCryptographicallySecureRandomBytes", nullptr, spike_sys_crypto_random_bytes_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetTimestamp", nullptr, spike_sys_get_timestamp_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetLowResolutionTimestamp", nullptr, spike_sys_low_res_timestamp_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetSystemTimeAsTicks", nullptr, spike_sys_system_time_ticks_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::Malloc", nullptr, spike_sys_malloc_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::Calloc", nullptr, spike_sys_calloc_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::Realloc", nullptr, spike_sys_realloc_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::Free", nullptr, spike_sys_free_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::AlignedAlloc", nullptr, spike_sys_aligned_alloc_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::AlignedFree", nullptr, spike_sys_free_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::SchedGetCpu", nullptr, spike_sys_minus_one_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetNonCryptographicallySecureRandomBytes(System.Byte*,System.Int32)", nullptr, spike_sys_random_bytes_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetCryptographicallySecureRandomBytes(System.Byte*,System.Int32)", nullptr, spike_sys_crypto_random_bytes_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetTimestamp()", nullptr, spike_sys_get_timestamp_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetLowResolutionTimestamp()", nullptr, spike_sys_low_res_timestamp_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetSystemTimeAsTicks()", nullptr, spike_sys_system_time_ticks_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::Malloc(System.UIntPtr)", nullptr, spike_sys_malloc_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::Calloc(System.UIntPtr,System.UIntPtr)", nullptr, spike_sys_calloc_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::Realloc(System.Void*,System.UIntPtr)", nullptr, spike_sys_realloc_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::Free(System.Void*)", nullptr, spike_sys_free_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::AlignedAlloc(System.UIntPtr,System.UIntPtr)", nullptr, spike_sys_aligned_alloc_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::AlignedFree(System.Void*)", nullptr, spike_sys_free_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::SchedGetCpu()", nullptr, spike_sys_minus_one_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::SetErrNo(System.Int32)", nullptr, kernel32_set_last_error_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetErrNo()", nullptr, kernel32_get_last_error_invoker);
+    // SPIKE-WASM: Linux / browser CoreLibs route EventSource through XplatEventLogger (CLRConfig QCalls). No config, no logging.
+    vm::PInvokes::register_pinvoke("System.Diagnostics.Tracing.XplatEventLogger::<EventSource_GetClrConfig>g____PInvoke", nullptr, spike_return_zero_invoker);
+    vm::PInvokes::register_pinvoke("System.Diagnostics.Tracing.XplatEventLogger::<IsEventSourceLoggingEnabled>g____PInvoke", nullptr, spike_return_zero_invoker);
+    vm::PInvokes::register_pinvoke("System.Diagnostics.Tracing.XplatEventLogger::<LogEventSource>g____PInvoke", nullptr, spike_return_zero_invoker);
     // LINUX-PATCH: Linux CoreLib's Marshal.Get/SetLastSystemError go through libSystem.Native errno
     vm::PInvokes::register_pinvoke("Interop/Sys::SetErrNo", nullptr, kernel32_set_last_error_invoker);
     vm::PInvokes::register_pinvoke("Interop/Sys::GetErrNo", nullptr, kernel32_get_last_error_invoker);
