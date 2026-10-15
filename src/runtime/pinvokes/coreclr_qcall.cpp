@@ -6501,8 +6501,7 @@ void register_coreclr_qcall_pinvokes() noexcept
     vm::PInvokes::register_pinvoke("Interop/Sys::AlignedAlloc(System.UIntPtr,System.UIntPtr)", nullptr, spike_sys_aligned_alloc_invoker);
     vm::PInvokes::register_pinvoke("Interop/Sys::AlignedFree(System.Void*)", nullptr, spike_sys_free_invoker);
     vm::PInvokes::register_pinvoke("Interop/Sys::SchedGetCpu()", nullptr, spike_sys_minus_one_invoker);
-    vm::PInvokes::register_pinvoke("Interop/Sys::SetErrNo(System.Int32)", nullptr, kernel32_set_last_error_invoker);
-    vm::PInvokes::register_pinvoke("Interop/Sys::GetErrNo()", nullptr, kernel32_get_last_error_invoker);
+    // (SetErrNo / GetErrNo are registered once below, by the linux-measurement block)
     // SPIKE-WASM: Linux / browser CoreLibs route EventSource through XplatEventLogger (CLRConfig QCalls). No config, no logging.
     vm::PInvokes::register_pinvoke("System.Diagnostics.Tracing.XplatEventLogger::<EventSource_GetClrConfig>g____PInvoke", nullptr, spike_return_zero_invoker);
     vm::PInvokes::register_pinvoke("System.Diagnostics.Tracing.XplatEventLogger::<IsEventSourceLoggingEnabled>g____PInvoke", nullptr, spike_return_zero_invoker);

@@ -66,8 +66,8 @@ void register_spike_linux_qcalls() noexcept
     vm::PInvokes::register_pinvoke(
         "System.Reflection.CustomAttribute::ParseAttributeUsageAttribute(System.IntPtr,System.Int32,System.Int32*,System.Int32*,System.Int32*)", nullptr,
         parse_attribute_usage_invoker);
-    vm::PInvokes::register_pinvoke("System.Diagnostics.Tracing.XplatEventLogger::<EventSource_GetClrConfig>g____PInvoke", nullptr,
-                                   xplat_get_clr_config_invoker);
+    // XplatEventLogger::<EventSource_GetClrConfig> is registered with the wasm32 block in coreclr_qcall.cpp (same "return null").
+    (void)xplat_get_clr_config_invoker;
 }
 
 } // namespace pinvokes
