@@ -275,7 +275,10 @@ static RtResult<uint64_t> read_customattribute_elem_value(metadata::RtModuleDef*
     {
         DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(std::optional<utils::Span<const char>>, opt_type_name, read_ser_string(reader));
         if (!opt_type_name)
-            RET_ASSERT_ERR(RtErr::BadImageFormat);
+        {
+            val = 0; // null System.Type (SerString 0xFF, ECMA-335 II.23.3), e.g. [ChildOf] with Type? type = null
+            break;
+        }
         auto& type_name_span = opt_type_name.value();
 
         DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(RtReflectionType*, type_obj,
@@ -426,7 +429,10 @@ static RtResult<uint64_t> read_customattribute_elem_value(metadata::RtModuleDef*
         {
             DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(std::optional<utils::Span<const char>>, opt_type_name, read_ser_string(reader));
             if (!opt_type_name)
-                RET_ASSERT_ERR(RtErr::BadImageFormat);
+            {
+                obj = nullptr; // boxed null System.Type
+                break;
+            }
             auto& type_name_span = opt_type_name.value();
 
             DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(RtReflectionType*, type_obj,
