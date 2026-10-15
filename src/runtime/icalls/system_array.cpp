@@ -325,8 +325,24 @@ static RtResultVoid clear_internal_invoker(metadata::RtManagedMethodPointer, con
     RET_VOID_OK();
 }
 
+/// SPIKE: @icall: System.Array::GetCorElementTypeOfElementType (CoreCLR FCall; "verifier" type: enums -> underlying)
+static RtResultVoid get_cor_element_type_of_element_type_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*,
+                                                                 const interp::RtStackObject* params, interp::RtStackObject* ret) noexcept
+{
+    auto arr = EvalStackOp::get_param<vm::RtArray*>(params, 0);
+    const metadata::RtClass* ele_klass = vm::Array::get_array_element_class(arr);
+    metadata::RtElementType et = ele_klass->by_val->ele_type;
+    if (vm::Class::is_enum_type(ele_klass))
+        et = vm::Class::get_enum_element_type(ele_klass);
+    else if (et == metadata::RtElementType::String || et == metadata::RtElementType::Object || et == metadata::RtElementType::GenericInst)
+        et = vm::Class::is_value_type(ele_klass) ? metadata::RtElementType::ValueType : metadata::RtElementType::Class;
+    EvalStackOp::set_return(ret, static_cast<int32_t>(et));
+    RET_VOID_OK();
+}
+
 // Internal call registry
 static vm::InternalCallEntry s_internal_call_entries_system_array[] = {
+    {"System.Array::GetCorElementTypeOfElementType()", nullptr, get_cor_element_type_of_element_type_invoker},
     {"System.Array::GetRank", (vm::InternalCallFunction)&SystemArray::get_rank, get_rank_invoker},
     {"System.Array::GetLength", (vm::InternalCallFunction)&SystemArray::get_length, get_length_invoker_icalls_system_array},
     {"System.Array::GetLowerBound", (vm::InternalCallFunction)&SystemArray::get_lower_bound, get_lower_bound_invoker},

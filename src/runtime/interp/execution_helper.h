@@ -9,74 +9,62 @@ namespace leanclr
 {
 namespace interp
 {
-template <typename Src, typename Dst>
-inline int32_t cast_float_to_small_int(Src value)
+// SPIKE: .NET 9+ conversion semantics (saturating on every platform; NaN -> 0). Was x86 "integer indefinite" / wrap-around.
+template <typename Src>
+inline int32_t sat_float_to_i32(Src value)
 {
-    return (int32_t)(Dst)(int32_t)(value);
-}
-
-template <typename Src, typename Dst>
-inline int32_t cast_float_to_i32(Src value)
-{
-    if (std::is_same<Dst, int32_t>::value)
-    {
-        constexpr Src lower_bound = static_cast<Src>(std::numeric_limits<int32_t>::min());
-        constexpr Src upper_bound = static_cast<Src>(static_cast<double>(std::numeric_limits<int32_t>::max()) + 1.0);
-        if (std::isnan(value) || value < lower_bound || value >= upper_bound)
-        {
-            return std::numeric_limits<int32_t>::min();
-        }
-        return static_cast<int32_t>(value);
-    }
-    else if (value >= 0.0)
-    {
-        return static_cast<int32_t>(static_cast<Dst>(value));
-    }
-    else
-    {
-        return static_cast<int32_t>(static_cast<Dst>(static_cast<int64_t>(value)));
-    }
-}
-
-template <typename Src, typename Dst>
-inline int64_t cast_float_to_i64(Src value)
-{
-    if (value >= 0.0)
-    {
-        return (int64_t)(uint64_t)value;
-    }
-    else
-    {
-        return (int64_t)(value);
-    }
+    if (std::isnan(value)) return 0;
+    if (value <= static_cast<Src>(-2147483648.0)) return std::numeric_limits<int32_t>::min();
+    if (value >= static_cast<Src>(2147483648.0)) return std::numeric_limits<int32_t>::max();
+    return static_cast<int32_t>(value);
 }
 
 template <typename Src>
 inline uint32_t cast_float_to_u32(Src value)
 {
-    if (std::isnan(value) || value <= static_cast<Src>(0))
-    {
-        return 0;
-    }
-    if (value >= static_cast<Src>(std::numeric_limits<uint32_t>::max()))
-    {
-        return std::numeric_limits<uint32_t>::max();
-    }
+    if (std::isnan(value) || value <= static_cast<Src>(0)) return 0;
+    if (value >= static_cast<Src>(4294967296.0)) return std::numeric_limits<uint32_t>::max();
     return static_cast<uint32_t>(value);
+}
+
+template <typename Src>
+inline int64_t sat_float_to_i64(Src value)
+{
+    if (std::isnan(value)) return 0;
+    if (value <= static_cast<Src>(-9223372036854775808.0)) return std::numeric_limits<int64_t>::min();
+    if (value >= static_cast<Src>(9223372036854775808.0)) return std::numeric_limits<int64_t>::max();
+    return static_cast<int64_t>(value);
 }
 
 template <typename Src>
 inline uint64_t cast_float_to_u64(Src value)
 {
-    if (std::isnan(value) || value <= static_cast<Src>(0))
-    {
-        return 0;
-    }
-    if (value >= static_cast<Src>(std::numeric_limits<uint64_t>::max()))
-    {
-        return std::numeric_limits<uint64_t>::max();
-    }
+    if (std::isnan(value) || value <= static_cast<Src>(0)) return 0;
+    if (value >= static_cast<Src>(18446744073709551616.0)) return std::numeric_limits<uint64_t>::max();
     return static_cast<uint64_t>(value);
+}
+
+// conv.i1/u1/i2/u2: saturate to int32, then truncate (CoreCLR 9+)
+template <typename Src, typename Dst>
+inline int32_t cast_float_to_small_int(Src value)
+{
+    return (int32_t)(Dst)sat_float_to_i32(value);
+}
+
+template <typename Src, typename Dst>
+inline int32_t cast_float_to_i32(Src value)
+{
+    if (std::is_signed<Dst>::value)
+        return sat_float_to_i32(value);
+    return static_cast<int32_t>(cast_float_to_u32(value));
+}
+
+template <typename Src, typename Dst>
+inline int64_t cast_float_to_i64(Src value)
+{
+    if (std::is_signed<Dst>::value)
+        return sat_float_to_i64(value);
+    return static_cast<int64_t>(cast_float_to_u64(value));
 }
 
 template <typename Src, typename Dst>

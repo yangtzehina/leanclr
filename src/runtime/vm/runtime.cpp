@@ -32,6 +32,8 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <vector>
 
 namespace leanclr
 {
@@ -437,6 +439,53 @@ static RtResultVoid configure_runtime_feature_switches()
     RET_VOID_OK();
 }
 
+// SPIKE: CoreCLR hosts pass runtimeconfig properties to AppContext.Setup(char** names, char** values, int count).
+// LEANCLR_APPCONTEXT="k=v;k=v" overrides the defaults below (invariant globalization, EventSource off, as a trimmed app would).
+static RtResultVoid configure_appcontext_properties()
+{
+    const char* spec = std::getenv("LEANCLR_APPCONTEXT");
+    std::string s = spec ? spec : "System.Globalization.Invariant=true;System.Diagnostics.Tracing.EventSource.IsSupported=false";
+    std::vector<std::vector<Utf16Char>> keys, vals;
+    size_t pos = 0;
+    while (pos < s.size())
+    {
+        size_t end = s.find(';', pos);
+        if (end == std::string::npos)
+            end = s.size();
+        std::string kv = s.substr(pos, end - pos);
+        pos = end + 1;
+        size_t eq = kv.find('=');
+        if (eq == std::string::npos || eq == 0)
+            continue;
+        std::vector<Utf16Char> k(kv.begin(), kv.begin() + eq), v(kv.begin() + eq + 1, kv.end());
+        k.push_back(0);
+        v.push_back(0);
+        keys.push_back(k);
+        vals.push_back(v);
+    }
+    if (keys.empty())
+        RET_VOID_OK();
+    std::vector<Utf16Char*> pk, pv;
+    for (size_t i = 0; i < keys.size(); i++)
+    {
+        pk.push_back(keys[i].data());
+        pv.push_back(vals[i].data());
+    }
+    metadata::RtModuleDef* corlib_mod = Assembly::get_corlib()->mod;
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(metadata::RtClass*, appctx_class, corlib_mod->get_class_by_name("System.AppContext", false, true));
+    RET_ERR_ON_FAIL(Class::initialize_all(appctx_class));
+    const metadata::RtMethodInfo* setup = Method::find_matched_method_in_class_by_name(appctx_class, "Setup");
+    if (setup == nullptr || setup->parameter_count != 3)
+        RET_VOID_OK();
+    Utf16Char** names = pk.data();
+    Utf16Char** values = pv.data();
+    int32_t count = static_cast<int32_t>(pk.size());
+    const void* args[3] = {&names, &values, &count};
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(RtObject*, unused, Runtime::invoke_with_run_cctor(setup, nullptr, args));
+    (void)unused;
+    RET_VOID_OK();
+}
+
 // Public Runtime functions implementation
 
 RtResultVoid Runtime::initialize()
@@ -492,6 +541,7 @@ RtResultVoid Runtime::initialize()
     }
 
     RET_ERR_ON_FAIL(trace_runtime_init_step("configure_runtime_feature_switches", configure_runtime_feature_switches()));
+    RET_ERR_ON_FAIL(trace_runtime_init_step("configure_appcontext_properties", configure_appcontext_properties()));
 
     RET_VOID_OK();
 }

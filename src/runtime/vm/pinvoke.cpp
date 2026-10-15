@@ -4,10 +4,12 @@
 #include "class.h"
 #include "metadata/module_def.h"
 #include "pinvokes/coreclr_qcall.h"
+#include "pinvokes/spike_linux_qcalls.h"
 #include "utils/string_builder.h"
 #include "utils/string_util.h"
 #include "metadata/metadata_name.h"
 #include "const_strs.h"
+#include "native_bridge.h"
 
 #include <cstring>
 #include <cstdlib>
@@ -185,6 +187,10 @@ RtResult<const PInvokeRegistry*> PInvokes::get_pinvoke_by_method(const metadata:
             RET_OK(&it->second);
     }
 
+    // SPIKE: fall back to the real native library (libSystem.Native etc.) for blittable LibraryImport stubs
+    if (const PInvokeRegistry* bridged = native_bridge_lookup(method))
+        RET_OK(bridged);
+
     RET_OK(nullptr);
 }
 
@@ -192,6 +198,7 @@ RtResult<const PInvokeRegistry*> PInvokes::get_pinvoke_by_method(const metadata:
 void PInvokes::initialize()
 {
     pinvokes::register_coreclr_qcall_pinvokes();
+    pinvokes::register_spike_linux_qcalls();
 }
 
 } // namespace vm

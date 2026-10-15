@@ -74,6 +74,23 @@ RtResult<int32_t> SystemRuntimeMethodHandle::get_slot(const metadata::RtMethodIn
         RET_ERR(RtErr::ArgumentNull);
     }
 
+    // SPIKE: CoreCLR numbers non-virtual methods after the vtable. CoreLib's PopulateProperties/PopulateEvents test
+    // `GetSlot(accessor) < GetNumVirtuals(type)` to dedupe overridden accessors; slot 0 for every non-virtual made all
+    // non-virtual properties but the first disappear. Also make sure the vtable (and thus override slots) exists.
+    metadata::RtClass* klass = const_cast<metadata::RtClass*>(method->parent);
+    if (klass != nullptr)
+    {
+        RET_ERR_ON_FAIL(vm::Class::initialize_vtables(klass));
+        if (!vm::Method::is_virtual(method))
+        {
+            for (uint32_t i = 0; i < klass->method_count; ++i)
+            {
+                if (klass->methods[i] == method)
+                    RET_OK(static_cast<int32_t>(klass->vtable_count + i));
+            }
+            RET_OK(static_cast<int32_t>(klass->vtable_count + klass->method_count));
+        }
+    }
     RET_OK(static_cast<int32_t>(method->slot));
 }
 

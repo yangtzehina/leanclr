@@ -1127,6 +1127,7 @@ RtResultVoid Transformer::add_conv(OpCodeEnum opcode, RtEvalStackDataType data_t
             case OpCodeEnum::ConvU8:
             case OpCodeEnum::ConvR4:
             case OpCodeEnum::ConvR8:
+            case OpCodeEnum::ConvRUn:
             case OpCodeEnum::ConvI:
             case OpCodeEnum::ConvU:
             case OpCodeEnum::ConvOvfI4:
@@ -3273,7 +3274,20 @@ RtResultVoid Transformer::transform_body()
             }
             case il::OpCodeValue::ConvRUn:
             {
-                RET_ERR_ON_FAIL(add_conv(hl::OpCodeEnum::ConvR8, RtEvalStackDataType::R8));
+                // SPIKE: unsigned source -> double (was signed ConvR8: (double)0xC0000000u == -1073741824.0)
+                // conv.r.un; conv.r4 on a 64-bit value in the same block -> one u64->float rounding (as RyuJIT); the
+                // two-step u64->double->float rounds twice (e.g. 0x4000_0080_0000_0001 -> 5f000000 instead of 5f000001)
+                if (il_offset_cur + 1 < il_offset_end && codes_begin[il_offset_cur + 1] == 0x6B /* conv.r4 */)
+                {
+                    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(const Variable*, top, get_top_var());
+                    if (top->data_type == RtEvalStackDataType::I8)
+                    {
+                        RET_ERR_ON_FAIL(add_conv(hl::OpCodeEnum::ConvRUnR4, RtEvalStackDataType::R4));
+                        il_offset_cur += 2;
+                        break;
+                    }
+                }
+                RET_ERR_ON_FAIL(add_conv(hl::OpCodeEnum::ConvRUn, RtEvalStackDataType::R8));
                 il_offset_cur += 1;
                 break;
             }

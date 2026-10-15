@@ -788,10 +788,13 @@ static RtResultVoid call_default_struct_constructor_invoker(metadata::RtManagedM
 }
 
 static vm::IntrinsicEntry s_intrinsic_entries_system_runtimetype[] = {
+#if 0 // SPIKE: these native shortcuts ignore overrides/hiding and report ReflectedType as DeclaringType; .NET 10 CoreLib's managed
+      // RuntimeTypeCache path (PopulateMethods/Properties/Fields over GetIntroducedMethods/GetSlot/GetFields) is correct on this runtime
     {"System.RuntimeType::GetField(System.String,System.Reflection.BindingFlags)", (vm::IntrinsicFunction)&SystemRuntimeType::get_field, get_field_invoker},
     {"System.RuntimeType::GetMethods(System.Reflection.BindingFlags)", (vm::IntrinsicFunction)&SystemRuntimeType::get_methods, get_methods_invoker},
     {"System.RuntimeType::GetProperties(System.Reflection.BindingFlags)", (vm::IntrinsicFunction)&SystemRuntimeType::get_properties,
      get_properties_invoker},
+#endif
     {"System.RuntimeType::GetCustomAttributes(System.Type,System.Boolean)", (vm::IntrinsicFunction)&SystemRuntimeType::get_custom_attributes,
      get_custom_attributes_invoker},
     {"System.RuntimeType::get_BaseType", (vm::IntrinsicFunction)&SystemRuntimeType::get_parent_type, get_parent_type_invoker},

@@ -217,8 +217,13 @@ RtResult<metadata::RtAssembly*> Assembly::load_from_data(RtAppDomain* app_domain
 
 RtResult<RtArray*> Assembly::get_types(metadata::RtAssembly* ass, bool exported_only)
 {
+    utils::Vector<metadata::RtClass*> all_types;
+    RET_ERR_ON_FAIL(ass->mod->get_types(exported_only, all_types));
+    // SPIKE: like CoreCLR, Assembly/Module.GetTypes() do not report the global <Module> type (TypeDef rid 1)
     utils::Vector<metadata::RtClass*> types;
-    RET_ERR_ON_FAIL(ass->mod->get_types(exported_only, types));
+    for (metadata::RtClass* k : all_types)
+        if (metadata::RtToken::decode_rid(k->token) != 1)
+            types.push_back(k);
 
     metadata::RtClass* cls_type = Class::get_corlib_types().cls_systemtype;
     DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(RtArray*, types_arr,

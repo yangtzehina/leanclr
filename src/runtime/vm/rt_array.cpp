@@ -118,12 +118,13 @@ RtResult<RtArray*> Array::__new_mdarray_from_array_klass(const metadata::RtClass
     RtArray* arr_obj = reinterpret_cast<RtArray*>(gc::GarbageCollector::allocate_array(arr_klass, total_array_bytes LEANCLR_GC_CALL_SITE_PARAM));
 
     // Set up bounds
-    ArrayBounds* bounds = Array::get_array_bounds(arr_obj);
+    int32_t* bound_lengths = reinterpret_cast<int32_t*>(&arr_obj->first_data);  // SPIKE: CoreCLR layout
+    int32_t* bound_lowers = bound_lengths + rank;
 
     for (uint8_t i = 0; i < rank; ++i)
     {
-        bounds[i].length = lengths[i];
-        bounds[i].lower_bound = (lower_bounds != nullptr) ? lower_bounds[i] : 0;
+        bound_lengths[i] = lengths[i];
+        bound_lowers[i] = (lower_bounds != nullptr) ? lower_bounds[i] : 0;
     }
 
     arr_obj->length = total_length;
@@ -179,8 +180,7 @@ RtResult<int32_t> Array::get_array_length_at_dimension(const RtArray* array, siz
         {
             RET_ERR(RtErr::IndexOutOfRange);
         }
-        const ArrayBounds* bounds = get_array_bounds(array);
-        RET_OK(bounds[dimension].length);
+        RET_OK(get_array_lengths(array)[dimension]);
     }
 
     default:
@@ -212,8 +212,7 @@ RtResult<int32_t> Array::get_array_lower_bound_at_dimension(const RtArray* array
         {
             RET_ERR(RtErr::IndexOutOfRange);
         }
-        const ArrayBounds* bounds = get_array_bounds(array);
-        RET_OK(bounds[dimension].lower_bound);
+        RET_OK(get_array_lower_bounds(array)[dimension]);
     }
 
     default:
@@ -253,20 +252,20 @@ RtResult<int32_t> Array::get_global_index_from_indices(const RtArray* arr, RtArr
         }
 
         int32_t offset = 0;
-        const ArrayBounds* bounds = get_array_bounds(arr);
+        const int32_t* bound_lengths = get_array_lengths(arr);
+        const int32_t* bound_lowers = get_array_lower_bounds(arr);
 
         for (int32_t i = 0; i < indice_length; ++i)
         {
             int32_t idx = get_array_data_at<int32_t>(indices, i);
-            const ArrayBounds* bound = &bounds[i];
-            int32_t index_relate_to_lower = idx - bound->lower_bound;
+                        int32_t index_relate_to_lower = idx - bound_lowers[i];
 
-            if ((uint32_t)index_relate_to_lower >= (uint32_t)bound->length)
+            if ((uint32_t)index_relate_to_lower >= (uint32_t)bound_lengths[i])
             {
                 RET_ERR(RtErr::IndexOutOfRange);
             }
 
-            offset = offset * bound->length + index_relate_to_lower;
+            offset = offset * bound_lengths[i] + index_relate_to_lower;
         }
         index = offset;
         break;
@@ -292,20 +291,20 @@ RtResult<int32_t> Array::get_mdarray_global_index_from_indices2(const RtArray* a
     uint8_t rank = arr_type->rank;
 
     int32_t offset = 0;
-    const ArrayBounds* bounds = get_array_bounds(arr);
+    const int32_t* bound_lengths = get_array_lengths(arr);
+        const int32_t* bound_lowers = get_array_lower_bounds(arr);
 
     for (uint8_t i = 0; i < rank; ++i)
     {
         int32_t idx = indices[i].i32;
-        const ArrayBounds* bound = &bounds[i];
-        int32_t index_relate_to_lower = idx - bound->lower_bound;
+                int32_t index_relate_to_lower = idx - bound_lowers[i];
 
-        if ((uint32_t)index_relate_to_lower >= (uint32_t)bound->length)
+        if ((uint32_t)index_relate_to_lower >= (uint32_t)bound_lengths[i])
         {
             RET_ERR(RtErr::IndexOutOfRange);
         }
 
-        offset = offset * bound->length + index_relate_to_lower;
+        offset = offset * bound_lengths[i] + index_relate_to_lower;
     }
 
     RET_OK(offset);
@@ -324,20 +323,20 @@ RtResult<int32_t> Array::get_mdarray_global_index_from_indices3(const RtArray* a
     uint8_t rank = arr_type->rank;
 
     int32_t offset = 0;
-    const ArrayBounds* bounds = get_array_bounds(arr);
+    const int32_t* bound_lengths = get_array_lengths(arr);
+        const int32_t* bound_lowers = get_array_lower_bounds(arr);
 
     for (uint8_t i = 0; i < rank; ++i)
     {
         int32_t idx = indices[i];
-        const ArrayBounds* bound = &bounds[i];
-        int32_t index_relate_to_lower = idx - bound->lower_bound;
+                int32_t index_relate_to_lower = idx - bound_lowers[i];
 
-        if ((uint32_t)index_relate_to_lower >= (uint32_t)bound->length)
+        if ((uint32_t)index_relate_to_lower >= (uint32_t)bound_lengths[i])
         {
             RET_ERR(RtErr::IndexOutOfRange);
         }
 
-        offset = offset * bound->length + index_relate_to_lower;
+        offset = offset * bound_lengths[i] + index_relate_to_lower;
     }
 
     RET_OK(offset);
@@ -605,6 +604,9 @@ RtResult<RtArray*> Array::__clone(RtArray* old_arr LEANCLR_GC_DECLARE_CALL_SITE_
         RET_ERR(RtErr::OutOfMemory);
     }
     std::memcpy(new_arr, old_arr, total_bytes);
+#if !LEANCLR_GC_DEBUG
+    new_arr->__sync_block = nullptr; // SPIKE: the header now holds the identity hash; a clone gets its own
+#endif
 
     // new_arr->length = old_arr->length;
     // size_t ele_size = get_array_element_size(old_arr);

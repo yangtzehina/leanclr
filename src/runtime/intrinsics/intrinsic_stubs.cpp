@@ -1,4 +1,5 @@
 #include "intrinsic_stubs.h"
+#include "spike_intrinsics.h"
 #include "system_activator.h"
 #include "system_array.h"
 #include "system_buffer.h"
@@ -64,6 +65,7 @@ void IntrinsicStubs::get_intrinsic_entries(utils::Vector<vm::IntrinsicEntry>& en
     Append(entries, SystemThreadingVolatile::get_intrinsic_entries());
     Append(entries, SystemThreadingThreadIntrinsics::get_intrinsic_entries());
     Append(entries, SystemNumericsVector::get_intrinsic_entries());
+    Append(entries, SpikeIntrinsics::get_intrinsic_entries());
 }
 
 void IntrinsicStubs::get_newobj_intrinsic_entries(utils::Vector<vm::NewobjIntrinsicEntry>& entries) noexcept

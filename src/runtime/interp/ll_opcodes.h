@@ -672,6 +672,9 @@ enum class OpCodeEnum
     EndFault,
     EndFaultShort,
     GetEnumLongHashCode,
+    ConvR8U4,
+    ConvR8U8,
+    ConvR4U8,
 
     //}}LOW_LEVEL_OPCODE_ENUMM
     __Count,
@@ -1254,6 +1257,9 @@ enum class OpCodeValue2 : uint8_t
     InitBlk = 0x30,
     CpBlk = 0x31,
     GetEnumLongHashCode = 0x32,
+    ConvR8U4 = 0x33, // SPIKE
+    ConvR8U8 = 0x34, // SPIKE
+    ConvR4U8 = 0x35, // SPIKE
 
     //}}LOW_LEVEL_OPCODE2
 };
@@ -7385,6 +7391,36 @@ struct GetEnumLongHashCode
     uint8_t __padding_7;
 };
 
+// SPIKE: conv.r.un
+struct ConvR8U4
+{
+    uint8_t __prefix;
+    uint8_t __code;
+    uint16_t src;
+    uint16_t dst;
+    uint8_t __padding_6;
+    uint8_t __padding_7;
+};
+
+struct ConvR8U8
+{
+    uint8_t __prefix;
+    uint8_t __code;
+    uint16_t src;
+    uint16_t dst;
+    uint8_t __padding_6;
+    uint8_t __padding_7;
+};
+
+struct ConvR4U8
+{
+    uint8_t __prefix;
+    uint8_t __code;
+    uint16_t src;
+    uint16_t dst;
+    uint8_t __padding_6;
+    uint8_t __padding_7;
+};
 
 //}}LOW_LEVEL_INSTRUCTION_STRUCTSS
 

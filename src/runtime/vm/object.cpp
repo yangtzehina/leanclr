@@ -290,7 +290,9 @@ RtResultVoid Object::unbox_any(const RtObject* obj, const metadata::RtClass* kla
 
         if (extend_to_stack)
         {
-            extends_to_eval_stack(src, reinterpret_cast<interp::RtStackObject*>(dst), unbox_cast_klass);
+            // SPIKE: extend by the target's own element type; cast_class of byte/ushort is sbyte/short (cast-compatible),
+            // which sign-extended (byte)(object)200 to -56 and broke Array.Sort<byte>/<ushort> (ArraySortHelper's typeof(T)==typeof(byte) path)
+            extends_to_eval_stack(src, reinterpret_cast<interp::RtStackObject*>(dst), element_class);
         }
         else
         {

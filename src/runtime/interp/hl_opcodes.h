@@ -202,6 +202,8 @@ enum class OpCodeEnum
     EndFilter,
     EndFinallyOrFault,
     GetEnumLongHashCode,
+    ConvRUn, // SPIKE: conv.r.un (was lowered to signed ConvR8)
+    ConvRUnR4, // SPIKE: fused conv.r.un + conv.r4 on a 64-bit source (single rounding, as RyuJIT)
 
     //}}HIGH_LEVEL_OPCODES
     __Count,

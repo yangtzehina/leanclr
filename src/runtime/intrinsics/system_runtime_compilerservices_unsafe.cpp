@@ -394,7 +394,59 @@ static RtResultVoid skip_init_invoker(metadata::RtManagedMethodPointer, const me
     RET_VOID_OK();
 }
 
+// SPIKE: placeholders the fork had not registered (their IL bodies throw PlatformNotSupportedException)
+static RtResultVoid subtract_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo* method, const interp::RtStackObject* params,
+                                     interp::RtStackObject* ret) noexcept
+{
+    void* source = interp::EvalStackOp::get_param<void*>(params, 0);
+    intptr_t element_offset = get_integer_offset_param(method, params, 1);
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(size_t, element_size, get_first_generic_arg_size(method));
+    interp::EvalStackOp::set_return(ret, add_bytes_to_pointer(source, -element_offset * static_cast<intptr_t>(element_size)));
+    RET_VOID_OK();
+}
+
+static RtResultVoid init_block_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject* params,
+                                       interp::RtStackObject*) noexcept
+{
+    void* dst = interp::EvalStackOp::get_param<void*>(params, 0);
+    uint8_t value = static_cast<uint8_t>(interp::EvalStackOp::get_param<int32_t>(params, 1));
+    uint32_t count = interp::EvalStackOp::get_param<uint32_t>(params, 2);
+    std::memset(dst, value, count);
+    RET_VOID_OK();
+}
+
+// Copy<T>(void* dst, ref T src) / Copy<T>(ref T dst, void* src): both are (dst, src) pointer pairs of sizeof(T) bytes
+static RtResultVoid copy_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo* method, const interp::RtStackObject* params,
+                                 interp::RtStackObject*) noexcept
+{
+    void* dst = interp::EvalStackOp::get_param<void*>(params, 0);
+    const void* src = interp::EvalStackOp::get_param<const void*>(params, 1);
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(size_t, element_size, get_first_generic_arg_size(method));
+    std::memmove(dst, src, element_size);
+    RET_VOID_OK();
+}
+
+// Unbox<T>(object box) -> ref T: address of the boxed payload (object header is one RtObject)
+static RtResultVoid unbox_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject* params,
+                                  interp::RtStackObject* ret) noexcept
+{
+    vm::RtObject* obj = interp::EvalStackOp::get_param<vm::RtObject*>(params, 0);
+    if (obj == nullptr)
+        RET_ERR(RtErr::NullReference);
+    interp::EvalStackOp::set_return(ret, reinterpret_cast<void*>(obj + 1));
+    RET_VOID_OK();
+}
+
 static vm::IntrinsicEntry s_intrinsic_entries_system_runtime_compilerservices_unsafe[] = {
+    {"System.Runtime.CompilerServices.Unsafe::Subtract<>", nullptr, subtract_invoker},
+    {"System.Runtime.CompilerServices.Unsafe::InitBlock", nullptr, init_block_invoker},
+    {"System.Runtime.CompilerServices.Unsafe::InitBlockUnaligned", nullptr, init_block_invoker},
+    {"System.Runtime.CompilerServices.Unsafe::InitBlock(System.Byte&,System.Byte,System.UInt32)", nullptr, init_block_invoker},
+    {"System.Runtime.CompilerServices.Unsafe::InitBlock(System.Void*,System.Byte,System.UInt32)", nullptr, init_block_invoker},
+    {"System.Runtime.CompilerServices.Unsafe::InitBlockUnaligned(System.Byte&,System.Byte,System.UInt32)", nullptr, init_block_invoker},
+    {"System.Runtime.CompilerServices.Unsafe::InitBlockUnaligned(System.Void*,System.Byte,System.UInt32)", nullptr, init_block_invoker},
+    {"System.Runtime.CompilerServices.Unsafe::Copy<>", nullptr, copy_invoker},
+    {"System.Runtime.CompilerServices.Unsafe::Unbox<>", nullptr, unbox_invoker},
     {"System.Runtime.CompilerServices.Unsafe::AsPointer<>", (vm::IntrinsicFunction)&SystemRuntimeCompilerServicesUnsafe::as_pointer, as_pointer_invoker},
     {"System.Runtime.CompilerServices.Unsafe::AsRef<>", (vm::IntrinsicFunction)&SystemRuntimeCompilerServicesUnsafe::as_pointer, as_pointer_invoker},
     {"System.Runtime.CompilerServices.Unsafe::As<>", (vm::IntrinsicFunction)&SystemRuntimeCompilerServicesUnsafe::as, as_invoker},

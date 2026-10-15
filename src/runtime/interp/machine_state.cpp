@@ -1,6 +1,8 @@
 #include <cstdint>
 #include <cstring>
 #include "machine_state.h"
+#include <cstdio>
+#include <cstdlib>
 
 #include "alloc/general_allocation.h"
 #include "gc/garbage_collector.h"
@@ -237,6 +239,14 @@ RtResult<InterpFrame*> MachineState::alloc_frame_stack()
 {
     if (_frame_stack_top + 1 > _frame_stack_size)
     {
+        if (std::getenv("LEANCLR_SO_TRACE"))  // SPIKE: debug aid, print the innermost frames
+        {
+            for (uint32_t i = 0; i < 16 && i < _frame_stack_top; i++)
+            {
+                const metadata::RtMethodInfo* m = _frame_stack_base[_frame_stack_top - 1 - i].method;
+                std::fprintf(stderr, "[so] %s.%s::%s\n", m->parent->namespaze, m->parent->name, m->name);
+            }
+        }
         RET_ERR(RtErr::StackOverflow);
     }
     InterpFrame* ptr = _frame_stack_base + _frame_stack_top;

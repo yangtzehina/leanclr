@@ -1122,7 +1122,7 @@ RtResult<const RtStackObject*> Interpreter::execute(const metadata::RtMethodInfo
         &&LABEL2_ConvU8R4, &&LABEL2_ConvU8R8,  &&LABEL2_ConvR4I4,
         &&LABEL2_ConvR4I8, &&LABEL2_ConvR4R8,  &&LABEL2_ConvR8I4,
         &&LABEL2_ConvR8I8, &&LABEL2_ConvR8R4,  &&LABEL2_LdelemaReadOnly,
-        &&LABEL2_InitBlk,  &&LABEL2_CpBlk,     &&LABEL2_GetEnumLongHashCode,
+        &&LABEL2_InitBlk,  &&LABEL2_CpBlk,     &&LABEL2_GetEnumLongHashCode, &&LABEL2_ConvR8U4, &&LABEL2_ConvR8U8, &&LABEL2_ConvR4U8,
     };
     static void* const in_labels3[] = {
         &&LABEL3_LdIndI2Unaligned,   &&LABEL3_LdIndU2Unaligned,  &&LABEL3_LdIndI4Unaligned,   &&LABEL3_LdIndI8Unaligned,   &&LABEL3_StIndI2Unaligned,
@@ -7076,6 +7076,24 @@ method_start:
                         set_stack_value_at<int32_t>(eval_stack_base, ir->dst, hash);
                     }
                     LEANCLR_CASE_END2()
+                    LEANCLR_CASE_BEGIN2(ConvR8U4)
+                    {
+                        uint32_t src = get_stack_value_at<uint32_t>(eval_stack_base, ir->src);
+                        set_stack_value_at<double>(eval_stack_base, ir->dst, static_cast<double>(src));
+                    }
+                    LEANCLR_CASE_END2()
+                    LEANCLR_CASE_BEGIN2(ConvR8U8)
+                    {
+                        uint64_t src = get_stack_value_at<uint64_t>(eval_stack_base, ir->src);
+                        set_stack_value_at<double>(eval_stack_base, ir->dst, static_cast<double>(src));
+                    }
+                    LEANCLR_CASE_END2()
+                    LEANCLR_CASE_BEGIN2(ConvR4U8)
+                    {
+                        uint64_t src = get_stack_value_at<uint64_t>(eval_stack_base, ir->src);
+                        set_stack_value_at<float>(eval_stack_base, ir->dst, static_cast<float>(src));
+                    }
+                    LEANCLR_CASE_END2()
 #if !LEANCLR_USE_COMPUTED_GOTO_DISPATCHER
                 default:
                 {
@@ -7488,8 +7506,7 @@ method_start:
                     LEANCLR_CASE_BEGIN3(ConvOvfI4R4)
                     {
                         float src = get_stack_value_at<float>(eval_stack_base, ir->src);
-                        if (src < static_cast<float>(std::numeric_limits<int32_t>::min()) || src > static_cast<float>(std::numeric_limits<int32_t>::max()) ||
-                            std::isnan(src))
+                        if (!(src > static_cast<float>(-2147483649.0) && src < static_cast<float>(2147483648.0)))  // SPIKE: test the truncated value
                         {
                             RAISE_RUNTIME_ERROR(RtErr::Overflow);
                         }
@@ -7499,8 +7516,7 @@ method_start:
                     LEANCLR_CASE_BEGIN3(ConvOvfI4R8)
                     {
                         double src = get_stack_value_at<double>(eval_stack_base, ir->src);
-                        if (src < static_cast<double>(std::numeric_limits<int32_t>::min()) || src > static_cast<double>(std::numeric_limits<int32_t>::max()) ||
-                            std::isnan(src))
+                        if (!(src > static_cast<double>(-2147483649.0) && src < static_cast<double>(2147483648.0)))  // SPIKE: test the truncated value
                         {
                             RAISE_RUNTIME_ERROR(RtErr::Overflow);
                         }
@@ -7532,7 +7548,7 @@ method_start:
                     LEANCLR_CASE_BEGIN3(ConvOvfU4R4)
                     {
                         float src = get_stack_value_at<float>(eval_stack_base, ir->src);
-                        if (src < 0.0f || src > static_cast<float>(std::numeric_limits<uint32_t>::max()) || std::isnan(src))
+                        if (!(src > static_cast<float>(-1.0) && src < static_cast<float>(4294967296.0)))  // SPIKE: test the truncated value
                         {
                             RAISE_RUNTIME_ERROR(RtErr::Overflow);
                         }
@@ -7542,7 +7558,7 @@ method_start:
                     LEANCLR_CASE_BEGIN3(ConvOvfU4R8)
                     {
                         double src = get_stack_value_at<double>(eval_stack_base, ir->src);
-                        if (src < 0.0 || src > static_cast<double>(std::numeric_limits<uint32_t>::max()) || std::isnan(src))
+                        if (!(src > static_cast<double>(-1.0) && src < static_cast<double>(4294967296.0)))  // SPIKE: test the truncated value
                         {
                             RAISE_RUNTIME_ERROR(RtErr::Overflow);
                         }
@@ -7552,8 +7568,7 @@ method_start:
                     LEANCLR_CASE_BEGIN3(ConvOvfI8R4)
                     {
                         float src = get_stack_value_at<float>(eval_stack_base, ir->src);
-                        if (src < static_cast<float>(std::numeric_limits<int64_t>::min()) || src > static_cast<float>(std::numeric_limits<int64_t>::max()) ||
-                            std::isnan(src))
+                        if (!(src >= static_cast<float>(-9223372036854775808.0) && src < static_cast<float>(9223372036854775808.0)))  // SPIKE: test the truncated value
                         {
                             RAISE_RUNTIME_ERROR(RtErr::Overflow);
                         }
@@ -7563,8 +7578,7 @@ method_start:
                     LEANCLR_CASE_BEGIN3(ConvOvfI8R8)
                     {
                         double src = get_stack_value_at<double>(eval_stack_base, ir->src);
-                        if (src < static_cast<double>(std::numeric_limits<int64_t>::min()) || src > static_cast<double>(std::numeric_limits<int64_t>::max()) ||
-                            std::isnan(src))
+                        if (!(src >= static_cast<double>(-9223372036854775808.0) && src < static_cast<double>(9223372036854775808.0)))  // SPIKE: test the truncated value
                         {
                             RAISE_RUNTIME_ERROR(RtErr::Overflow);
                         }
@@ -7595,7 +7609,7 @@ method_start:
                     LEANCLR_CASE_BEGIN3(ConvOvfU8R4)
                     {
                         float src = get_stack_value_at<float>(eval_stack_base, ir->src);
-                        if (src < 0.0f || src > static_cast<float>(std::numeric_limits<uint64_t>::max()) || std::isnan(src))
+                        if (!(src > static_cast<float>(-1.0) && src < static_cast<float>(18446744073709551616.0)))  // SPIKE: test the truncated value
                         {
                             RAISE_RUNTIME_ERROR(RtErr::Overflow);
                         }
@@ -7605,7 +7619,7 @@ method_start:
                     LEANCLR_CASE_BEGIN3(ConvOvfU8R8)
                     {
                         double src = get_stack_value_at<double>(eval_stack_base, ir->src);
-                        if (src < 0.0 || src > static_cast<double>(std::numeric_limits<uint64_t>::max()) || std::isnan(src))
+                        if (!(src > static_cast<double>(-1.0) && src < static_cast<double>(18446744073709551616.0)))  // SPIKE: test the truncated value
                         {
                             RAISE_RUNTIME_ERROR(RtErr::Overflow);
                         }
@@ -8373,6 +8387,13 @@ unwind_exception_handler:
                 {
                     vm::Exception::set_current_exception(ex);
                     RET_ERR(RtErr::ManagedException);
+                }
+                if (is_in_filter_check_flow(frame))
+                {
+                    // SPIKE: an exception escaping a filter (thrown in a callee of the filter expression) is swallowed and the
+                    // filter evaluates to false (ECMA-335 I.12.4.2.7 / CoreCLR); resume the original search past this clause.
+                    vm::Exception::clear_current_exception_if_matches(ex);
+                    continue;
                 }
                 push_throw_flow(ex, frame, frame->ip);
                 // unwind to previous frame to continue searching

@@ -9,7 +9,7 @@ namespace icalls
 
 RtResult<double> SystemMath::round(double value) noexcept
 {
-    RET_OK(std::round(value));
+    RET_OK(std::nearbyint(value));  // SPIKE: ECMA/.NET Math.Round(double) is round-half-to-even (std::round is half-away-from-zero)
 }
 
 /// @icall: System.Math::Round(System.Double)

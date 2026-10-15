@@ -62,8 +62,36 @@ RtResult<int32_t> SystemRuntimeCompilerServicesRuntimeHelpers::get_hash_code(vm:
         RET_OK(0);
     }
 
+#if !LEANCLR_GC_DEBUG
+    // SPIKE: CoreCLR identity hash: per-thread LCG (threads.cpp GetNewHashCode, seed chain 123456789 * 1566083941 + 1,
+    // multiplier = managedThreadId * 4 + 5), top 26 bits, never 0, remembered in the object header (__sync_block is
+    // unused outside LEANCLR_GC_DEBUG). Deterministic and platform-independent; the address-based hash changed every
+    // run (ASLR) and between 32/64-bit targets.
+    uintptr_t stored = reinterpret_cast<uintptr_t>(obj->__sync_block);
+    if (stored != 0)
+        RET_OK(static_cast<int32_t>(stored));
+    static uint32_t s_seed_chain = 123456789u;
+    static uint32_t s_next_thread_id = 1;
+    thread_local uint32_t t_seed = 0;
+    thread_local uint32_t t_thread_id = 0;
+    if (t_thread_id == 0)
+    {
+        s_seed_chain = s_seed_chain * 1566083941u + 1u;
+        t_seed = s_seed_chain;
+        t_thread_id = s_next_thread_id++;
+    }
+    uint32_t v;
+    do
+    {
+        t_seed = t_seed * (t_thread_id * 4u + 5u) + 1u;
+        v = t_seed >> (32 - 26);
+    } while (v == 0);
+    obj->__sync_block = reinterpret_cast<void*>(static_cast<uintptr_t>(v));
+    RET_OK(static_cast<int32_t>(v));
+#else
     int32_t hash = static_cast<int32_t>(reinterpret_cast<uintptr_t>(obj));
     RET_OK(hash);
+#endif
 }
 
 RtResultVoid SystemRuntimeCompilerServicesRuntimeHelpers::run_class_constructor(intptr_t type_handle) noexcept

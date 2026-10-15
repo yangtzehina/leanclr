@@ -89,9 +89,11 @@ RtResultVoid MetadataName::append_klass_full_name_without_generic_params(utils::
 
 static void append_public_key_token(utils::Utf8StringBuilder& sb, const uint8_t* token, size_t length)
 {
+    static const char kHex[] = "0123456789abcdef"; // SPIKE: CoreCLR prints the token in lower case
     for (size_t i = 0; i < length; ++i)
     {
-        sb.append_hex(token[i]);
+        sb.append_char(kHex[token[i] >> 4]);
+        sb.append_char(kHex[token[i] & 0x0F]);
     }
 }
 
@@ -116,7 +118,10 @@ void MetadataName::append_assembly_name(utils::Utf8StringBuilder& sb, const meta
         sb.append_cstr(assemblyName.culture);
     }
     sb.append_cstr(", PublicKeyToken=");
-    if (assemblyName.public_key_token[0] != 0)
+    bool has_token = false; // SPIKE: a token may start with a 0 byte
+    for (size_t i = 0; i < sizeof(assemblyName.public_key_token); ++i)
+        has_token = has_token || assemblyName.public_key_token[i] != 0;
+    if (has_token)
     {
         append_public_key_token(sb, assemblyName.public_key_token, sizeof(assemblyName.public_key_token));
     }

@@ -673,6 +673,9 @@ size_t OpCodes::s_opsizes[static_cast<size_t>(OpCodeEnum::__Count)] = {
     sizeof(EndFault),
     sizeof(EndFaultShort),
     sizeof(GetEnumLongHashCode),
+    sizeof(ConvR8U4),
+    sizeof(ConvR8U8),
+    sizeof(ConvR4U8),
 
     //}}LOW_LEVEL_INSTRUCTION_SIZESS
 };
@@ -6689,6 +6692,33 @@ uint8_t* OpCodes::write_instruction_to_data(uint8_t* codes, const GeneralInst& i
         ir->value_ptr = (uint16_t)inst.get_var_src_eval_stack_idx();
         ir->dst = (uint16_t)inst.get_var_dst_eval_stack_idx();
         return codes + sizeof(GetEnumLongHashCode);
+    }
+    case OpCodeEnum::ConvR8U4:
+    {
+        auto ir = (ConvR8U4*)codes;
+        ir->__prefix = 252;
+        ir->__code = 51;
+        ir->src = (uint16_t)inst.get_var_src_eval_stack_idx();
+        ir->dst = (uint16_t)inst.get_var_dst_eval_stack_idx();
+        return codes + sizeof(ConvR8U4);
+    }
+    case OpCodeEnum::ConvR8U8:
+    {
+        auto ir = (ConvR8U8*)codes;
+        ir->__prefix = 252;
+        ir->__code = 52;
+        ir->src = (uint16_t)inst.get_var_src_eval_stack_idx();
+        ir->dst = (uint16_t)inst.get_var_dst_eval_stack_idx();
+        return codes + sizeof(ConvR8U8);
+    }
+    case OpCodeEnum::ConvR4U8:
+    {
+        auto ir = (ConvR4U8*)codes;
+        ir->__prefix = 252;
+        ir->__code = 53;
+        ir->src = (uint16_t)inst.get_var_src_eval_stack_idx();
+        ir->dst = (uint16_t)inst.get_var_dst_eval_stack_idx();
+        return codes + sizeof(ConvR4U8);
     }
 
     //}}LOW_LEVEL_INSTRUCTION_WRITE_TO_DATA_DATA

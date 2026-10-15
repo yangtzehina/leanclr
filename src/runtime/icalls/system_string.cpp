@@ -68,6 +68,9 @@ static RtResultVoid newobj_char_array_range_invoker(metadata::RtManagedMethodPoi
 
 RtResult<vm::RtString*> SystemString::newobj_utf16chars(const Utf16Char* chars) noexcept
 {
+    // SPIKE: new string((char*)null) == string.Empty (ECMA / CoreCLR); was a null deref
+    if (chars == nullptr)
+        RET_OK(vm::String::get_empty_string());
     // Determine length of null-terminated UTF-16 string
     int32_t length = static_cast<int32_t>(utils::StringUtil::get_utf16chars_length(chars));
     vm::RtString* utf16_string = vm::String::create_string_from_utf16chars(reinterpret_cast<const uint16_t*>(chars), length);

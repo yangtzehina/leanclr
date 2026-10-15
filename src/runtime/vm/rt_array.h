@@ -111,6 +111,17 @@ class Array
         return const_cast<ArrayBounds*>(get_array_bounds(static_cast<const RtArray*>(array)));
     }
 
+    // SPIKE: CoreCLR MD-array layout (CoreLib reads it via RawArrayData.Data): int32 lengths[rank], then int32 lower_bounds[rank]
+    static int32_t* get_array_lengths(const RtArray* array)
+    {
+        return reinterpret_cast<int32_t*>(const_cast<uint64_t*>(&array->first_data));
+    }
+
+    static int32_t* get_array_lower_bounds(const RtArray* array)
+    {
+        return get_array_lengths(array) + get_array_rank(array);
+    }
+
     static size_t get_array_bounds_byte_size(const RtArray* array)
     {
         assert(array);

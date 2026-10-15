@@ -1,4 +1,6 @@
 #include "module_def.h"
+#include "spike_sha1.h"
+#include <cstring>
 
 #include "const_strs.h"
 #include "utils/rt_vector.h"
@@ -275,6 +277,8 @@ RtResultVoid RtModuleDef::setup_assembly_name()
     auto& row = opt_row.value();
     UNWRAP_OR_RET_ERR_ON_FAIL(_assemblyName.name, get_string(row.name));
     UNWRAP_OR_RET_ERR_ON_FAIL(_assemblyName.public_key, get_blob(row.public_key));
+    if (!spike_public_key_token_from_blob(_assemblyName.public_key, _assemblyName.public_key_token)) // SPIKE
+        std::memset(_assemblyName.public_key_token, 0, sizeof(_assemblyName.public_key_token));
     UNWRAP_OR_RET_ERR_ON_FAIL(_assemblyName.culture, get_string(row.locale));
     _assemblyName.hash_algorithm = row.hash_alg_id;
     _assemblyName.hash_len = 0;
@@ -359,11 +363,13 @@ RtResultVoid RtModuleDef::setup_nested_classes()
         value.nested_type_def_rids = _pool.calloc_any<uint32_t>(value.count);
         value.count = 0;
     }
-    for (utils::HashMap<uint32_t, uint32_t>::const_iterator map_it = _nestedTypeDefRid2EnclosingTypeDefRidMap.begin();
-         map_it != _nestedTypeDefRid2EnclosingTypeDefRidMap.end(); ++map_it)
+    // SPIKE: fill in NestedClass table order (sorted by nested TypeDef rid, = CoreCLR's EnumNestedTypes order) instead of
+    // hash-map iteration order, which was reversed here and is not stable across standard libraries.
+    for (uint32_t i = 0; i < nestedClassCount; ++i)
     {
-        uint32_t nestedTypeDefRid = map_it->first;
-        uint32_t enclosingTypeDefRid = map_it->second;
+        auto row = _cliImage.read_nested_class(i + 1).value();
+        uint32_t nestedTypeDefRid = row.nested_class;
+        uint32_t enclosingTypeDefRid = row.enclosing_class;
         utils::HashMap<uint32_t, EnclosingTypeInfo>::iterator found_it = _enclosingTypeDefRid2StartRidMap.find(enclosingTypeDefRid);
         assert(found_it != _enclosingTypeDefRid2StartRidMap.end());
         EnclosingTypeInfo& eti = found_it->second;

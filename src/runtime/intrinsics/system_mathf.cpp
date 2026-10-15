@@ -11,7 +11,7 @@ namespace intrinsics
 
 RtResult<float> SystemMathF::round(float value) noexcept
 {
-    RET_OK(static_cast<float>(std::round(static_cast<double>(value))));
+    RET_OK(std::nearbyint(value));  // SPIKE: round-half-to-even
 }
 
 /// @intrinsic: System.MathF::Round(System.Single)

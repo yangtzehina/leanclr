@@ -2109,6 +2109,18 @@ RtResult<RtObject*> Reflection::create_runtime_property_info_object(const metada
     int32_t flags = static_cast<int32_t>(property->flags);
     RtArray* other_methods = nullptr;
     int32_t binding_flags = get_property_binding_flags(property, is_private);
+    {
+        // SPIKE: RuntimeType.FilterPreCalculate: a property inherited from a base type carries DeclaredOnly
+        // (+ FlattenHierarchy if static), which is how GetProperties(DeclaredOnly) filters it out.
+        const metadata::RtFieldInfo* rt_field = Class::get_field_for_name(reflected_type_cache->klass, "m_runtimeType", true);
+        if (rt_field != nullptr)
+        {
+            RtObject* reflected = *reinterpret_cast<RtObject**>(reinterpret_cast<uint8_t*>(reflected_type_cache) +
+                                                                Field::get_instance_field_offset_includes_object_header_for_all_type(rt_field));
+            if (reflected != nullptr && reflected != reinterpret_cast<RtObject*>(declaring_type))
+                binding_flags |= 0x0002 | ((binding_flags & BINDING_FLAGS_STATIC) != 0 ? 0x0040 : 0);
+        }
+    }
     RtObject* signature = nullptr;
     RtArray* parameters = nullptr;
 

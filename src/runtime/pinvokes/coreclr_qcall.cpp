@@ -409,13 +409,113 @@ RtResultVoid append_basic_type_name(utils::Utf8StringBuilder& sb, const metadata
     RET_VOID_OK();
 }
 
+// SPIKE: CoreCLR TypeString::AppendType rules for ConstructName(FormatNamespace | FormatFullInst | FormatAssembly):
+// generic definitions print their parameters only for ToString (FormatNamespace alone); FormatFullInst prints each
+// non-generic-variable argument as [assembly-qualified name]; FormatAssembly appends the root element type's assembly.
+constexpr int32_t SPIKE_FORMAT_FULL_INST = 0x00000002;
+static RtResultVoid spike_append_clr_type_name(utils::Utf8StringBuilder& sb, const metadata::RtTypeSig* sig, int32_t flags) noexcept
+{
+    const bool to_string = (flags & (FORMAT_NAMESPACE | SPIKE_FORMAT_FULL_INST | FORMAT_ASSEMBLY)) == FORMAT_NAMESPACE;
+    const int32_t inner = flags & ~FORMAT_ASSEMBLY;
+    const metadata::RtTypeSig* root = sig;
+    switch (sig->ele_type)
+    {
+    case metadata::RtElementType::Array:
+        RET_ERR_ON_FAIL(spike_append_clr_type_name(sb, sig->data.array_type->ele_type, inner));
+        sb.append_char('[');
+        if (sig->data.array_type->rank > 1)
+            sb.append_chars(',', sig->data.array_type->rank - 1);
+        else
+            sb.append_char('*');
+        sb.append_char(']');
+        root = sig->data.array_type->ele_type;
+        break;
+    case metadata::RtElementType::SZArray:
+    case metadata::RtElementType::Ptr:
+        RET_ERR_ON_FAIL(spike_append_clr_type_name(sb, sig->data.element_type, inner));
+        sb.append_cstr(sig->ele_type == metadata::RtElementType::Ptr ? "*" : "[]");
+        root = sig->data.element_type;
+        break;
+    case metadata::RtElementType::Var:
+    case metadata::RtElementType::MVar:
+        sb.append_cstr(sig->data.generic_param->name);
+        root = nullptr;
+        break;
+    case metadata::RtElementType::FnPtr:
+        RET_ERR_ON_FAIL(metadata::MetadataName::append_type_full_name(sb, sig, metadata::TypeNameFormat::FullName, false));
+        root = nullptr;
+        break;
+    default:
+    {
+        DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(metadata::RtClass*, klass, vm::Class::get_class_from_typesig(sig));
+        RET_ERR_ON_FAIL(metadata::MetadataName::append_klass_full_name_without_generic_params(sb, klass, metadata::TypeNameFormat::FullName));
+        if (vm::Class::is_generic_inst(klass))
+        {
+            const metadata::RtGenericInst* inst = sig->data.generic_class->class_inst;
+            sb.append_char('[');
+            for (uint8_t i = 0; i < inst->generic_arg_count; ++i)
+            {
+                if (i > 0)
+                    sb.append_char(',');
+                const metadata::RtTypeSig* arg = inst->generic_args[i];
+                if ((flags & SPIKE_FORMAT_FULL_INST) != 0 && arg->ele_type != metadata::RtElementType::Var &&
+                    arg->ele_type != metadata::RtElementType::MVar)
+                {
+                    sb.append_char('[');
+                    RET_ERR_ON_FAIL(spike_append_clr_type_name(sb, arg, FORMAT_NAMESPACE | SPIKE_FORMAT_FULL_INST | FORMAT_ASSEMBLY));
+                    sb.append_char(']');
+                }
+                else
+                {
+                    RET_ERR_ON_FAIL(spike_append_clr_type_name(sb, arg, inner));
+                }
+            }
+            sb.append_char(']');
+        }
+        else if (klass->generic_container != nullptr && to_string)
+        {
+            sb.append_char('[');
+            for (uint8_t i = 0; i < klass->generic_container->generic_param_count; ++i)
+            {
+                if (i > 0)
+                    sb.append_char(',');
+                sb.append_cstr(klass->generic_container->generic_params[i].name);
+            }
+            sb.append_char(']');
+        }
+        break;
+    }
+    }
+    if (sig->by_ref)
+        sb.append_char('&');
+    if ((flags & FORMAT_ASSEMBLY) != 0 && root != nullptr)
+    {
+        while (root->ele_type == metadata::RtElementType::SZArray || root->ele_type == metadata::RtElementType::Ptr ||
+               root->ele_type == metadata::RtElementType::Array)
+            root = root->ele_type == metadata::RtElementType::Array ? root->data.array_type->ele_type : root->data.element_type;
+        if (root->ele_type != metadata::RtElementType::Var && root->ele_type != metadata::RtElementType::MVar &&
+            root->ele_type != metadata::RtElementType::FnPtr)
+        {
+            DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(metadata::RtClass*, rk, vm::Class::get_class_from_typesig(root));
+            sb.append_cstr(", ");
+            metadata::MetadataName::append_assembly_name(sb, rk->image->get_assembly_name());
+        }
+    }
+    RET_VOID_OK();
+}
+
 RtResult<vm::RtString*> construct_type_name(void* qcall_type_handle, void* native_handle, int32_t format_flags) noexcept
 {
     DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(const metadata::RtTypeSig*, type_sig,
                                             vm::Reflection::get_type_sig_from_qcall_type_handle(qcall_type_handle, native_handle));
 
     utils::Utf8StringBuilder sb;
-    if ((format_flags & FORMAT_ASSEMBLY) != 0)
+    if ((format_flags & (FORMAT_NAMESPACE | FORMAT_ASSEMBLY)) != 0)
+    {
+        RET_ERR_ON_FAIL(spike_append_clr_type_name(sb, type_sig, format_flags));
+        sb.sure_null_terminator_but_not_append();
+    }
+    else if ((format_flags & FORMAT_ASSEMBLY) != 0)
     {
         RET_ERR_ON_FAIL(metadata::MetadataName::append_type_full_name(sb, type_sig, metadata::TypeNameFormat::AssemblyQualified, false));
     }
@@ -1049,6 +1149,10 @@ static RtResult<bool> is_ca_visible_from_decorated_type(void* attr_qcall_type_ha
         RET_OK(false);
     }
 
+    if (attr_ctor == nullptr)  // SPIKE: parameterless ctor: type visibility decides (default ctor of a visible attribute type)
+    {
+        RET_OK(true);
+    }
     return is_method_visible_from_source(attr_ctor, source_klass, source_module);
 }
 
@@ -1126,12 +1230,18 @@ RtResult<int32_t> get_runtime_type_fields(void* method_table, RtIntPtrSpan data,
 
     utils::Vector<const metadata::RtFieldInfo*> fields;
     fields.reserve(klass->field_count);
-    for (uint32_t i = 0; i < klass->field_count; ++i)
+    // SPIKE: CoreCLR's FieldDesc list (what this QCall walks) holds instance fields first, then statics, each in metadata
+    // order; literals come later from metadata. Reflection order (GetFields/GetMembers) follows it.
+    for (int pass = 0; pass < 2; ++pass)
     {
-        const metadata::RtFieldInfo* field = klass->fields + i;
-        if ((field->flags & static_cast<uint32_t>(metadata::RtFieldAttribute::Literal)) == 0)
+        for (uint32_t i = 0; i < klass->field_count; ++i)
         {
-            fields.push_back(field);
+            const metadata::RtFieldInfo* field = klass->fields + i;
+            if ((field->flags & static_cast<uint32_t>(metadata::RtFieldAttribute::Literal)) != 0)
+                continue;
+            bool is_static = (field->flags & static_cast<uint32_t>(metadata::RtFieldAttribute::Static)) != 0;
+            if (is_static == (pass == 1))
+                fields.push_back(field);
         }
     }
 
@@ -2007,6 +2117,37 @@ RtResult<const metadata::RtMethodInfo*> get_method_for_stack_mark(vm::RtStackCra
     int32_t caller_skip = mark == vm::RtStackCrawlMark::LookForMyCallersCaller ? 1 : 0;
 
     auto frames = interp::MachineState::get_global_machine_state().get_active_frames();
+    // SPIKE: CoreCLR semantics - the mark is a local of the method that declared it; find that frame and return it
+    // (LookForMe), its caller, or its caller's caller. The fallback below (innermost frame) returned a CoreLib frame for
+    // Type.GetType(string), so types in the calling assembly were never found.
+    if (stack_mark != nullptr && mark != vm::RtStackCrawlMark::LookForThread)
+    {
+        const interp::RtStackObject* p = reinterpret_cast<const interp::RtStackObject*>(stack_mark);
+        for (size_t k = frames.size(); k > 0; --k)
+        {
+            const interp::InterpFrame* f = &frames[k - 1];
+            if (f->eval_stack_base == nullptr || p < f->eval_stack_base)
+                continue;
+            const interp::RtStackObject* end = k < frames.size() && frames[k].eval_stack_base > f->eval_stack_base
+                                                   ? frames[k].eval_stack_base
+                                                   : f->eval_stack_base + f->eval_stack_size;
+            if (p >= end)
+                continue;
+            int32_t skip = mark == vm::RtStackCrawlMark::LookForMe ? 0 : (mark == vm::RtStackCrawlMark::LookForMyCaller ? 1 : 2);
+            for (size_t j = k; j > 0; --j)
+            {
+                const interp::InterpFrame* c = &frames[j - 1];
+                if (c->method == nullptr || (j != k && is_runtime_native_call_frame(c)) ||
+                    (skip_method_base_helpers && is_method_base_get_current_method_frame(c)) ||
+                    (skip_assembly_helpers && is_assembly_stack_walk_helper_frame(c)))
+                    continue;
+                if (skip-- > 0)
+                    continue;
+                RET_OK(c->method);
+            }
+            break;
+        }
+    }
     for (size_t i = frames.size(); i > 0; --i)
     {
         const interp::InterpFrame* frame = &frames[i - 1];
@@ -5975,8 +6116,15 @@ RtResultVoid runtime_method_handle_is_ca_visible_from_decorated_type_invoker(met
     auto source_qcall_module = interp::EvalStackOp::get_param<void*>(params, 5);
     auto source_native_module = interp::EvalStackOp::get_param<void*>(params, 6);
 
-    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(const metadata::RtMethodInfo*, attr_ctor,
-                                            vm::Reflection::get_method_info_from_handle_arg(attr_ctor_arg));
+    // SPIKE: CoreLib passes RuntimeMethodHandleInternal.EmptyHandle for attributes whose ctor has no parameters
+    // (FilterCustomAttributeRecord only resolves ctors with parameters); that threw ArgumentNullException for e.g. [Serializable]-style attrs.
+    const metadata::RtMethodInfo* attr_ctor = nullptr;
+    if (attr_ctor_arg != nullptr)
+    {
+        DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(const metadata::RtMethodInfo*, resolved_ctor,
+                                                vm::Reflection::get_method_info_from_handle_arg(attr_ctor_arg));
+        attr_ctor = resolved_ctor;
+    }
     DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(bool, visible,
                                             is_ca_visible_from_decorated_type(attr_qcall_type_handle, attr_native_handle, attr_ctor,
                                                                              source_qcall_type_handle, source_native_handle,

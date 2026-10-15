@@ -1223,6 +1223,13 @@ RtResultVoid Transformer::transform_instructions()
                 RET_ERR_ON_FAIL(transform_conv(ll_inst, hl_inst, OpCodeEnum::ConvR8I4, OpCodeEnum::ConvR8I8, OpCodeEnum::ConvR8R4, OpCodeEnum::Nop));
                 add = ll_inst->get_opcode() != OpCodeEnum::Nop;
                 break;
+            case hl::OpCodeEnum::ConvRUnR4:  // SPIKE: only emitted for 64-bit sources
+                ll_inst->set_opcode(OpCodeEnum::ConvR4U8);
+                break;
+            case hl::OpCodeEnum::ConvRUn:  // SPIKE
+                RET_ERR_ON_FAIL(transform_conv(ll_inst, hl_inst, OpCodeEnum::ConvR8U4, OpCodeEnum::ConvR8U8, OpCodeEnum::ConvR8R4, OpCodeEnum::Nop));
+                add = ll_inst->get_opcode() != OpCodeEnum::Nop;
+                break;
 
             case hl::OpCodeEnum::ConvOvfI1:
                 RET_ERR_ON_FAIL(
