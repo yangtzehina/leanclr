@@ -232,13 +232,10 @@ bool MarkSweepHeap::is_allocated_object(const vm::RtObject* obj)
         return obj->klass != nullptr;
     }
 
-    for (size_t i = 0; i < kSizeClassPoolCount; ++i)
+    const SmallHeapArena* arena = SmallHeapArenaIndex::find(ptr);
+    if (arena != nullptr && arena->contains_allocated_block(ptr))
     {
-        SizeClassPool* pool = s_size_class_pools[i];
-        if (pool != nullptr && pool->contains_allocated_block(ptr))
-        {
-            return obj->klass != nullptr;
-        }
+        return obj->klass != nullptr;
     }
 
     return false;

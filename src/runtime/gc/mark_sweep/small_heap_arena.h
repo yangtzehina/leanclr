@@ -62,6 +62,25 @@ class SmallHeapArena
     bool contains_allocated_block(const void* ptr) const;
     size_t get_block_size() const;
     size_t sweep(const GCAliveObjectBitmap& alive_object_bitmap);
+    uintptr_t data_begin() const
+    {
+        return reinterpret_cast<uintptr_t>(_data);
+    }
+    uintptr_t data_end() const
+    {
+        return reinterpret_cast<uintptr_t>(_data) + _block_count * _block_size;
+    }
+};
+
+// Address-sorted index of every live SmallHeapArena (all size classes). MarkSweepHeap::is_allocated_object is asked on
+// every typeof(T) / Type.IsValueType / reflection-handle check; scanning all arenas there made long calls quadratic,
+// because the GC never runs inside a call and arenas pile up. Lookup is a binary search instead.
+class SmallHeapArenaIndex
+{
+  public:
+    static void add(SmallHeapArena* arena);
+    static void remove(SmallHeapArena* arena);
+    static SmallHeapArena* find(const void* ptr);
 };
 
 class SizeClassPool

@@ -33,9 +33,13 @@ static bool is_runtime_field_info_value_method(const metadata::RtMethodInfo* met
         return false;
     }
 
+    // runs on every callvirt: cheapest, most selective tests first (same result as before)
+    if (method->parameter_count != 0 || std::strcmp(method->name, "get_Value") != 0)
+    {
+        return false;
+    }
     const metadata::RtClass* klass = method->parent;
-    return std::strcmp(klass->namespaze, "System") == 0 && std::strcmp(klass->name, "IRuntimeFieldInfo") == 0 &&
-           std::strcmp(method->name, "get_Value") == 0 && method->parameter_count == 0;
+    return std::strcmp(klass->name, "IRuntimeFieldInfo") == 0 && std::strcmp(klass->namespaze, "System") == 0;
 }
 
 static RtResult<const RtInterpMethodInfo*> transform(const metadata::RtMethodInfo* method)

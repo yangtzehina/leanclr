@@ -229,6 +229,77 @@ size_t SmallHeapArena::sweep(const GCAliveObjectBitmap& alive_object_bitmap)
     return freed_count;
 }
 
+namespace
+{
+struct ArenaRange
+{
+    uintptr_t begin;
+    uintptr_t end;
+    SmallHeapArena* arena;
+};
+
+utils::Vector<ArenaRange>& arena_ranges()
+{
+    static utils::Vector<ArenaRange> s_ranges;
+    return s_ranges;
+}
+
+// number of ranges whose begin <= addr (ranges are sorted by begin and never overlap)
+size_t count_ranges_starting_at_or_before(const utils::Vector<ArenaRange>& ranges, uintptr_t addr)
+{
+    size_t lo = 0;
+    size_t hi = ranges.size();
+    while (lo < hi)
+    {
+        size_t mid = lo + (hi - lo) / 2;
+        if (ranges[mid].begin <= addr)
+        {
+            lo = mid + 1;
+        }
+        else
+        {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+} // namespace
+
+void SmallHeapArenaIndex::add(SmallHeapArena* arena)
+{
+    utils::Vector<ArenaRange>& ranges = arena_ranges();
+    const ArenaRange range{arena->data_begin(), arena->data_end(), arena};
+    const size_t pos = count_ranges_starting_at_or_before(ranges, range.begin);
+    ranges.push_back(range);
+    for (size_t i = ranges.size() - 1; i > pos; --i)
+    {
+        ranges[i] = ranges[i - 1];
+    }
+    ranges[pos] = range;
+}
+
+void SmallHeapArenaIndex::remove(SmallHeapArena* arena)
+{
+    utils::Vector<ArenaRange>& ranges = arena_ranges();
+    const size_t n = count_ranges_starting_at_or_before(ranges, arena->data_begin());
+    if (n > 0 && ranges[n - 1].arena == arena)
+    {
+        ranges.erase(ranges.begin() + (n - 1));
+    }
+}
+
+SmallHeapArena* SmallHeapArenaIndex::find(const void* ptr)
+{
+    const utils::Vector<ArenaRange>& ranges = arena_ranges();
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+    const size_t n = count_ranges_starting_at_or_before(ranges, addr);
+    if (n == 0 || addr >= ranges[n - 1].end)
+    {
+        return nullptr;
+    }
+    return ranges[n - 1].arena;
+}
+
 SizeClassPool::SizeClassPool(size_t arena_size, size_t block_size, size_t block_alignment)
     : _arena_size(arena_size), _block_size(block_size), _block_alignment(block_alignment), _current_arena(nullptr), _next_find_not_full_start(0)
 {
@@ -250,12 +321,15 @@ SmallHeapArena* SizeClassPool::allocate_arena()
         alloc::GeneralAllocation::aligned_free(arena_data);
         return nullptr;
     }
-    return new (mem) SmallHeapArena(arena_data, _arena_size, _block_size);
+    auto* arena = new (mem) SmallHeapArena(arena_data, _arena_size, _block_size);
+    SmallHeapArenaIndex::add(arena);
+    return arena;
 }
 
 void SizeClassPool::free_arena(SmallHeapArena* arena)
 {
     assert(arena != nullptr);
+    SmallHeapArenaIndex::remove(arena);
     arena->~SmallHeapArena();
     alloc::GeneralAllocation::free(arena);
 }
