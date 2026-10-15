@@ -1781,12 +1781,21 @@ RtResultVoid initialize_signature_from_metadata(vm::RtSignature* signature, void
         }
 
         utils::BinaryReader reader(raw_sig, static_cast<size_t>(raw_sig_size));
-        UNWRAP_OR_RET_ERR_ON_FAIL(
-            property_sig,
-            declaring_klass->image->read_property_sig(reader, vm::Class::get_generic_container_context(declaring_klass), nullptr));
-        return_or_field_type = property_sig.type_sig;
-        parameters = property_sig.params.data();
-        parameter_count = static_cast<int32_t>(property_sig.params.size());
+        const metadata::RtGenericContainerContext gcc = vm::Class::get_generic_container_context(declaring_klass);
+        // Reflection hands over a raw blob with no member: MdFieldInfo.FieldType (const / literal fields, which have no
+        // RtFieldInfo of their own) passes a FIELD sig (0x06 CustomMod* Type), RuntimePropertyInfo a PROPERTY sig (0x08).
+        if (raw_sig_size > 0 &&
+            metadata::RtMetadata::decode_sig_type(*static_cast<const uint8_t*>(raw_sig)) == metadata::RtSigType::Field)
+        {
+            UNWRAP_OR_RET_ERR_ON_FAIL(return_or_field_type, declaring_klass->image->read_field_sig(reader, gcc, nullptr));
+        }
+        else
+        {
+            UNWRAP_OR_RET_ERR_ON_FAIL(property_sig, declaring_klass->image->read_property_sig(reader, gcc, nullptr));
+            return_or_field_type = property_sig.type_sig;
+            parameters = property_sig.params.data();
+            parameter_count = static_cast<int32_t>(property_sig.params.size());
+        }
     }
 
     DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(vm::RtReflectionRuntimeType*, return_type,
