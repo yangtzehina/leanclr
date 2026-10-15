@@ -7,7 +7,9 @@ option(LEANCLR_ENABLE_CPP_EXCEPTIONS "Enable C++ exceptions for runtime target" 
 option(LEANCLR_ENABLE_PROFILE "Enable PGO profiling instrumentation" OFF)
 
 set(LEANCLR_GC_ALGORITHM "MARK_SWEEP")
-option(LEANCLR_GC_DEBUG "Enable GC debug (quarantine, allocation sites)" ON)
+option(LEANCLR_GC_DEBUG "Enable GC debug (quarantine, allocation sites)" OFF)
+# Emscripten: optimisation flags for the runtime library, space separated (release: "-O3 -flto"; the final link must use the same).
+set(LEANCLR_WASM_OPT "-O2" CACHE STRING "Emscripten optimisation flags for the leanclr library")
 
 set(RUNTIME_DIRS
     alloc
@@ -89,17 +91,18 @@ if(MSVC)
     endif()
 elseif(EMSCRIPTEN)
 
+    separate_arguments(LEANCLR_WASM_OPT_LIST UNIX_COMMAND "${LEANCLR_WASM_OPT}")
     target_compile_options(leanclr PRIVATE
         $<$<BOOL:${LEANCLR_ENABLE_CPP_EXCEPTIONS}>:-fexceptions>
         $<$<NOT:$<BOOL:${LEANCLR_ENABLE_CPP_EXCEPTIONS}>>:-fno-exceptions>
         -fno-rtti
-        -O2
+        ${LEANCLR_WASM_OPT_LIST}
     )
 
     target_link_options(leanclr PRIVATE
         "SHELL: -s WASM=1"
         "SHELL: -s ALLOW_MEMORY_GROWTH=1"
-        -O2
+        ${LEANCLR_WASM_OPT_LIST}
     )
 
 else()
