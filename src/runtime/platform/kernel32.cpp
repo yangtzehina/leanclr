@@ -415,6 +415,7 @@ bool copy_file_contents(const char* src, const char* dst, uint32_t flags)
     int input = -1;
     int output = -1;
     bool ok = false;
+    int out_flags;  // LINUX-PATCH: hoisted so goto does not cross init
 
     input = ::open(src, O_RDONLY);
     if (input < 0)
@@ -423,7 +424,7 @@ bool copy_file_contents(const char* src, const char* dst, uint32_t flags)
         goto done;
     }
 
-    int out_flags = O_WRONLY | O_CREAT | O_TRUNC;
+    out_flags = O_WRONLY | O_CREAT | O_TRUNC;
     if ((flags & kCopyFileFailIfExists) != 0)
     {
         out_flags |= O_EXCL;

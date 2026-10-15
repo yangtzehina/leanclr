@@ -225,11 +225,22 @@ uint32_t RtSys::get_environment_variable(const Utf16Char* variable_name, Utf16Ch
     return static_cast<uint32_t>(::GetEnvironmentVariableW(reinterpret_cast<LPCWSTR>(variable_name), reinterpret_cast<LPWSTR>(value),
                                                           static_cast<DWORD>(value_length)));
 #else
-    (void)variable_name;
-    (void)value;
-    (void)value_length;
-    s_last_win32_error = 203; // ERROR_ENVVAR_NOT_FOUND
-    return 0;
+    // LINUX-PATCH (scratch measurement copy): ASCII getenv so DOTNET_SYSTEM_GLOBALIZATION_INVARIANT is visible
+    char name[256];
+    size_t i = 0;
+    for (; variable_name && variable_name[i] && i < sizeof(name) - 1; i++) name[i] = static_cast<char>(variable_name[i]);
+    name[i] = 0;
+    const char* v = variable_name ? std::getenv(name) : nullptr;
+    if (v == nullptr)
+    {
+        s_last_win32_error = 203; // ERROR_ENVVAR_NOT_FOUND
+        return 0;
+    }
+    uint32_t n = static_cast<uint32_t>(std::strlen(v));
+    if (value == nullptr || value_length <= n) return n + 1;
+    for (uint32_t k = 0; k < n; k++) value[k] = static_cast<Utf16Char>(static_cast<unsigned char>(v[k]));
+    value[n] = 0;
+    return n;
 #endif
 }
 

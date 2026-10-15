@@ -10,6 +10,8 @@
 #include "const_strs.h"
 
 #include <cstring>
+#include <cstdlib>
+#include <string>
 
 namespace leanclr
 {
@@ -35,10 +37,35 @@ static bool is_coreclr_generated_pinvoke_wrapper(const metadata::RtMethodInfo* m
 }
 
 // Register an internal call function by name
+// LINUX-PATCH (scratch measurement copy): Roslyn LibraryImport stub names carry a build-specific ordinal
+// ("<X>g____PInvoke|296_0" on the Windows CoreLib, "|65_0" on Linux). Also index every key with "|<n>_<n>" removed.
+static std::string lcw_strip_ordinal(const char* s)
+{
+    std::string r;
+    for (const char* p = s; *p;)
+    {
+        if (*p == '|' && p[1] >= '0' && p[1] <= '9')
+        {
+            const char* q = p + 1;
+            while (*q >= '0' && *q <= '9') q++;
+            if (*q == '_') { q++; while (*q >= '0' && *q <= '9') q++; p = q; continue; }
+        }
+        r.push_back(*p++);
+    }
+    return r;
+}
+
 void PInvokes::register_pinvoke(const char* name, PInvokeFunction func, PInvokeInvoker invoker)
 {
     assert(g_internalcall_map.find(name) == g_internalcall_map.end() && "PInvoke already registered");
     g_internalcall_map[name] = PInvokeRegistry{func, invoker};
+    std::string n = lcw_strip_ordinal(name);
+    if (n != name && g_internalcall_map.find(n.c_str()) == g_internalcall_map.end())
+    {
+        char* k = static_cast<char*>(std::malloc(n.size() + 1));
+        std::memcpy(k, n.c_str(), n.size() + 1);
+        g_internalcall_map[k] = PInvokeRegistry{func, invoker};
+    }
 }
 
 // Get internal call by name
@@ -121,6 +148,22 @@ RtResult<const PInvokeRegistry*> PInvokes::get_pinvoke_by_method(const metadata:
             RET_OK(&it->second);
         const char* signature_without_module = sb.get_const_chars() + length;
         it = g_internalcall_map.find(signature_without_module);
+        if (it != g_internalcall_map.end())
+            RET_OK(&it->second);
+    }
+
+    if (is_coreclr_generated_pinvoke_wrapper(method))
+    {
+        sb.clear();
+        RET_ERR_ON_FAIL(metadata::MetadataName::append_method_full_name_with_params(sb, method, metadata::TypeNameFormat::InternalName));
+        std::string k1 = lcw_strip_ordinal(sb.get_const_chars());
+        auto it = g_internalcall_map.find(k1.c_str());
+        if (it != g_internalcall_map.end())
+            RET_OK(&it->second);
+        sb.clear();
+        RET_ERR_ON_FAIL(metadata::MetadataName::append_method_full_name_without_params(sb, method, metadata::TypeNameFormat::InternalName));
+        std::string k2 = lcw_strip_ordinal(sb.get_const_chars());
+        it = g_internalcall_map.find(k2.c_str());
         if (it != g_internalcall_map.end())
             RET_OK(&it->second);
     }

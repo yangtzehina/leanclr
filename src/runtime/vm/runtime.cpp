@@ -427,9 +427,9 @@ static RtResultVoid configure_runtime_feature_switches()
     RET_ERR_ON_FAIL(Class::initialize_all(runtime_feature_class));
 
     constexpr metadata::EncodedTokenId is_dynamic_code_supported_field_token = 0x040016DA;
+    (void)is_dynamic_code_supported_field_token;  // LINUX-PATCH: token is specific to one CoreLib build; look up by name
     DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(const metadata::RtFieldInfo*, is_dynamic_code_supported_field,
-                                            corlib_mod->get_field_by_token(metadata::RtToken::decode(is_dynamic_code_supported_field_token),
-                                                                          metadata::RtGenericContainerContext{}, nullptr));
+                                            Field::find_field_by_name(runtime_feature_class, "<IsDynamicCodeSupported>k__BackingField"));
 
     bool is_supported = false;
     RET_ERR_ON_FAIL(Field::set_static_value(is_dynamic_code_supported_field, &is_supported));

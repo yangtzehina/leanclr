@@ -47,6 +47,24 @@
 #include "vm/rt_thread.h"
 #include "vm/type.h"
 
+// LINUX-PATCH (scratch copy only): Windows-only Kernel32 entry points stubbed for a Linux measurement build
+namespace lcw_linux_stub {
+template <typename... A> inline intptr_t load_library_ex(A...) { return 0; }
+template <typename... A> inline intptr_t get_proc_address(A...) { return 0; }
+template <typename... A> inline intptr_t free_library(A...) { return 0; }
+template <typename... A> inline intptr_t initialize_critical_section(A...) { return 0; }
+template <typename... A> inline intptr_t delete_critical_section(A...) { return 0; }
+template <typename... A> inline intptr_t enter_critical_section(A...) { return 0; }
+template <typename... A> inline intptr_t leave_critical_section(A...) { return 0; }
+template <typename... A> inline intptr_t initialize_condition_variable(A...) { return 0; }
+template <typename... A> inline intptr_t sleep_condition_variable_cs(A...) { return 0; }
+template <typename... A> inline intptr_t wake_condition_variable(A...) { return 0; }
+template <typename... A> inline intptr_t create_io_completion_port(A...) { return 0; }
+template <typename... A> inline intptr_t post_queued_completion_status(A...) { return 0; }
+template <typename... A> inline intptr_t get_queued_completion_status_ex(A...) { return 0; }
+template <typename... A> inline intptr_t get_queued_completion_status(A...) { return 0; }
+}
+
 namespace leanclr
 {
 namespace pinvokes
@@ -3008,7 +3026,7 @@ RtResultVoid native_library_load_from_path_invoker(metadata::RtManagedMethodPoin
     auto library_name = interp::EvalStackOp::get_param<const Utf16Char*>(params, 0);
     (void)interp::EvalStackOp::get_param<int32_t>(params, 1);
 
-    intptr_t result = platform::Kernel32::load_library_ex(library_name, 0, 0);
+    intptr_t result = lcw_linux_stub::load_library_ex(library_name, 0, 0);
     interp::EvalStackOp::set_return(ret, result);
     RET_VOID_OK();
 }
@@ -3022,7 +3040,7 @@ RtResultVoid native_library_load_by_name_invoker(metadata::RtManagedMethodPointe
     uint32_t dll_import_search_path_flag = interp::EvalStackOp::get_param<uint32_t>(params, 3);
     (void)interp::EvalStackOp::get_param<int32_t>(params, 4);
 
-    intptr_t result = platform::Kernel32::load_library_ex(library_name, 0, static_cast<int32_t>(dll_import_search_path_flag));
+    intptr_t result = lcw_linux_stub::load_library_ex(library_name, 0, static_cast<int32_t>(dll_import_search_path_flag));
     interp::EvalStackOp::set_return(ret, result);
     RET_VOID_OK();
 }
@@ -3067,7 +3085,7 @@ RtResultVoid native_library_get_symbol_invoker(metadata::RtManagedMethodPointer,
         }
         else
         {
-            result = platform::Kernel32::get_proc_address(handle, symbol.get_const_chars());
+            result = lcw_linux_stub::get_proc_address(handle, symbol.get_const_chars());
         }
     }
     interp::EvalStackOp::set_return(ret, result);
@@ -3078,7 +3096,7 @@ RtResultVoid native_library_free_lib_invoker(metadata::RtManagedMethodPointer, c
                                              interp::RtStackObject*) noexcept
 {
     intptr_t handle = interp::EvalStackOp::get_param<intptr_t>(params, 0);
-    (void)platform::Kernel32::free_library(handle);
+    (void)lcw_linux_stub::free_library(handle);
     RET_VOID_OK();
 }
 
@@ -3288,7 +3306,7 @@ RtResultVoid kernel32_initialize_critical_section_invoker(metadata::RtManagedMet
                                                           const interp::RtStackObject* params, interp::RtStackObject*) noexcept
 {
     void* critical_section = interp::EvalStackOp::get_param<void*>(params, 0);
-    platform::Kernel32::initialize_critical_section(critical_section);
+    lcw_linux_stub::initialize_critical_section(critical_section);
     RET_VOID_OK();
 }
 
@@ -3296,7 +3314,7 @@ RtResultVoid kernel32_delete_critical_section_invoker(metadata::RtManagedMethodP
                                                       interp::RtStackObject*) noexcept
 {
     void* critical_section = interp::EvalStackOp::get_param<void*>(params, 0);
-    platform::Kernel32::delete_critical_section(critical_section);
+    lcw_linux_stub::delete_critical_section(critical_section);
     RET_VOID_OK();
 }
 
@@ -3304,7 +3322,7 @@ RtResultVoid kernel32_enter_critical_section_invoker(metadata::RtManagedMethodPo
                                                      interp::RtStackObject*) noexcept
 {
     void* critical_section = interp::EvalStackOp::get_param<void*>(params, 0);
-    platform::Kernel32::enter_critical_section(critical_section);
+    lcw_linux_stub::enter_critical_section(critical_section);
     RET_VOID_OK();
 }
 
@@ -3312,7 +3330,7 @@ RtResultVoid kernel32_leave_critical_section_invoker(metadata::RtManagedMethodPo
                                                      interp::RtStackObject*) noexcept
 {
     void* critical_section = interp::EvalStackOp::get_param<void*>(params, 0);
-    platform::Kernel32::leave_critical_section(critical_section);
+    lcw_linux_stub::leave_critical_section(critical_section);
     RET_VOID_OK();
 }
 
@@ -3320,7 +3338,7 @@ RtResultVoid kernel32_initialize_condition_variable_invoker(metadata::RtManagedM
                                                             const interp::RtStackObject* params, interp::RtStackObject*) noexcept
 {
     void* condition_variable = interp::EvalStackOp::get_param<void*>(params, 0);
-    platform::Kernel32::initialize_condition_variable(condition_variable);
+    lcw_linux_stub::initialize_condition_variable(condition_variable);
     RET_VOID_OK();
 }
 
@@ -3330,7 +3348,7 @@ RtResultVoid kernel32_sleep_condition_variable_cs_invoker(metadata::RtManagedMet
     void* condition_variable = interp::EvalStackOp::get_param<void*>(params, 0);
     void* critical_section = interp::EvalStackOp::get_param<void*>(params, 1);
     int32_t milliseconds = interp::EvalStackOp::get_param<int32_t>(params, 2);
-    int32_t result = platform::Kernel32::sleep_condition_variable_cs(condition_variable, critical_section, milliseconds) ? 1 : 0;
+    int32_t result = lcw_linux_stub::sleep_condition_variable_cs(condition_variable, critical_section, milliseconds) ? 1 : 0;
     interp::EvalStackOp::set_return(ret, result);
     RET_VOID_OK();
 }
@@ -3339,7 +3357,7 @@ RtResultVoid kernel32_wake_condition_variable_invoker(metadata::RtManagedMethodP
                                                        const interp::RtStackObject* params, interp::RtStackObject*) noexcept
 {
     void* condition_variable = interp::EvalStackOp::get_param<void*>(params, 0);
-    platform::Kernel32::wake_condition_variable(condition_variable);
+    lcw_linux_stub::wake_condition_variable(condition_variable);
     RET_VOID_OK();
 }
 
@@ -3350,7 +3368,7 @@ RtResultVoid kernel32_create_io_completion_port_invoker(metadata::RtManagedMetho
     intptr_t existing_completion_port = interp::EvalStackOp::get_param<intptr_t>(params, 1);
     uintptr_t completion_key = interp::EvalStackOp::get_param<uintptr_t>(params, 2);
     int32_t number_of_concurrent_threads = interp::EvalStackOp::get_param<int32_t>(params, 3);
-    intptr_t result = platform::Kernel32::create_io_completion_port(file_handle, existing_completion_port, completion_key,
+    intptr_t result = lcw_linux_stub::create_io_completion_port(file_handle, existing_completion_port, completion_key,
                                                                     number_of_concurrent_threads);
     interp::EvalStackOp::set_return(ret, result);
     RET_VOID_OK();
@@ -3364,7 +3382,7 @@ RtResultVoid kernel32_post_queued_completion_status_invoker(metadata::RtManagedM
     uintptr_t completion_key = interp::EvalStackOp::get_param<uintptr_t>(params, 2);
     intptr_t overlapped = interp::EvalStackOp::get_param<intptr_t>(params, 3);
     int32_t result =
-        platform::Kernel32::post_queued_completion_status(completion_port, number_of_bytes_transferred, completion_key, overlapped) ? 1 : 0;
+        lcw_linux_stub::post_queued_completion_status(completion_port, number_of_bytes_transferred, completion_key, overlapped) ? 1 : 0;
     interp::EvalStackOp::set_return(ret, result);
     RET_VOID_OK();
 }
@@ -3377,7 +3395,7 @@ RtResultVoid kernel32_get_queued_completion_status_invoker(metadata::RtManagedMe
     uintptr_t* completion_key = interp::EvalStackOp::get_param<uintptr_t*>(params, 2);
     intptr_t* overlapped = interp::EvalStackOp::get_param<intptr_t*>(params, 3);
     int32_t milliseconds = interp::EvalStackOp::get_param<int32_t>(params, 4);
-    int32_t result = platform::Kernel32::get_queued_completion_status(completion_port, number_of_bytes_transferred, completion_key, overlapped,
+    int32_t result = lcw_linux_stub::get_queued_completion_status(completion_port, number_of_bytes_transferred, completion_key, overlapped,
                                                                       milliseconds) ? 1 : 0;
     interp::EvalStackOp::set_return(ret, result);
     RET_VOID_OK();
@@ -3392,7 +3410,7 @@ RtResultVoid kernel32_get_queued_completion_status_ex_invoker(metadata::RtManage
     int32_t* number_of_entries_removed = interp::EvalStackOp::get_param<int32_t*>(params, 3);
     int32_t milliseconds = interp::EvalStackOp::get_param<int32_t>(params, 4);
     int32_t alertable = interp::EvalStackOp::get_param<int32_t>(params, 5);
-    int32_t result = platform::Kernel32::get_queued_completion_status_ex(completion_port, completion_port_entries, count, number_of_entries_removed,
+    int32_t result = lcw_linux_stub::get_queued_completion_status_ex(completion_port, completion_port_entries, count, number_of_entries_removed,
                                                                          milliseconds, alertable) ? 1 : 0;
     interp::EvalStackOp::set_return(ret, result);
     RET_VOID_OK();
@@ -6216,6 +6234,11 @@ void register_coreclr_qcall_pinvokes() noexcept
     vm::PInvokes::register_pinvoke("Interop/Kernel32::SetLastError", nullptr, kernel32_set_last_error_invoker);
     vm::PInvokes::register_pinvoke("Kernel32::SetLastError(System.Int32)", nullptr, kernel32_set_last_error_invoker);
     vm::PInvokes::register_pinvoke("Kernel32::SetLastError", nullptr, kernel32_set_last_error_invoker);
+    // LINUX-PATCH: Linux CoreLib's Marshal.Get/SetLastSystemError go through libSystem.Native errno
+    vm::PInvokes::register_pinvoke("Interop/Sys::SetErrNo", nullptr, kernel32_set_last_error_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetErrNo", nullptr, kernel32_get_last_error_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::SetErrNo(System.Int32)", nullptr, kernel32_set_last_error_invoker);
+    vm::PInvokes::register_pinvoke("Interop/Sys::GetErrNo()", nullptr, kernel32_get_last_error_invoker);
     vm::PInvokes::register_pinvoke("[kernel32.dll]SetLastError", (vm::PInvokeFunction)kernel32_set_last_error_native,
                                    kernel32_set_last_error_invoker);
     vm::PInvokes::register_pinvoke("SetLastError", (vm::PInvokeFunction)kernel32_set_last_error_native, kernel32_set_last_error_invoker);
