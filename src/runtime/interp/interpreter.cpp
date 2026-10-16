@@ -8422,7 +8422,6 @@ unwind_exception_handler:
             else
             {
                 uint32_t src_ip_offset = static_cast<uint32_t>(reinterpret_cast<const uint8_t*>(data.src_ip) - imi->codes);
-                uint32_t target_ip_offset = static_cast<uint32_t>(reinterpret_cast<const uint8_t*>(data.target_ip) - imi->codes);
                 const RtInterpExceptionClause* next_finally_clause = nullptr;
                 for (size_t i = data.next_search_clause_idx; i < clause_count; ++i)
                 {
@@ -8430,8 +8429,11 @@ unwind_exception_handler:
                     if (clause->try_begin_offset <= src_ip_offset && src_ip_offset < clause->try_end_offset)
                     {
                         data.next_search_clause_idx = static_cast<uint32_t>(i + 1);
-                        if (clause->flags == metadata::RtILExceptionClauseType::Finally && clause->is_in_try_block(src_ip_offset) &&
-                            !clause->is_in_try_block(target_ip_offset))
+                        // The transformer chose which finally clauses run (and how many) from IL offsets; the tries holding
+                        // the leave are nested, so the ones left are the innermost `count` finally clauses holding it. No
+                        // target test here: after nop removal a target just before a try (`again: try { ... goto again; }`)
+                        // shares the try's first IR offset and would wrongly count as inside it.
+                        if (clause->flags == metadata::RtILExceptionClauseType::Finally && clause->is_in_try_block(src_ip_offset))
                         {
                             next_finally_clause = clause;
                             break;
