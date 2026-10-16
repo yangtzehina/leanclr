@@ -719,6 +719,49 @@ internal class Program
         generator.Generate(conf);
 
         Il2CppCompatibilityOutputs.EmitIfRequested(globalServices.Config, manifest, dllSearchPaths, aotAssemblyNames, metaService);
+        WriteManifestReport(Path.Combine(confBuilder.outputCodeDir, "manifest-report.json"), manifest);
+    }
+
+    /// <summary>Which methods were compiled and why the others stay interpreted, per assembly (for coverage reports).</summary>
+    private static void WriteManifestReport(string path, Manifest manifest)
+    {
+        var sb = new StringBuilder();
+        sb.Append("{\n");
+        bool firstAss = true;
+        foreach (var (assName, plan) in manifest.AssemblyPlans.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            sb.Append(firstAss ? "" : ",\n").Append("  ").Append(JsonString(assName)).Append(": {\"aot\": ").Append(plan.MethodPlans.Count).Append(", \"skipped\": {");
+            firstAss = false;
+            bool firstReason = true;
+            if (manifest.SkippedMethods.TryGetValue(assName, out var byReason))
+            {
+                foreach (var (reason, methods) in byReason)
+                {
+                    sb.Append(firstReason ? "\n" : ",\n").Append("    ").Append(JsonString(reason)).Append(": [");
+                    firstReason = false;
+                    sb.Append(string.Join(", ", methods.Select(JsonString)));
+                    sb.Append(']');
+                }
+            }
+            sb.Append(firstReason ? "}}" : "\n  }}");
+        }
+        sb.Append("\n}\n");
+        File.WriteAllText(path, sb.ToString());
+    }
+
+    private static string JsonString(string s)
+    {
+        var sb = new StringBuilder("\"");
+        foreach (char c in s)
+        {
+            if (c == '"' || c == '\\')
+                sb.Append('\\').Append(c);
+            else if (c < 0x20)
+                sb.Append($"\\u{(int)c:x4}");
+            else
+                sb.Append(c);
+        }
+        return sb.Append('"').ToString();
     }
 
     private static bool ShouldSkipUnsupportedRuntimeIntrinsic(MethodDef method, RuntimeApiCatalog runtimeApiCatalog)

@@ -41,6 +41,23 @@ namespace LeanAOT.GenerationPlan
 
         public IReadOnlyList<GenericMethodPlan> GenericMethodPlans => _genericMethodPlans;
 
+        /// <summary>
+        /// Per assembly: why methods with IL bodies were left to the interpreter (reason -> method full names).
+        /// Reasons: "generic method", "generic type", "exception handlers", "vararg", "rules", "unsupported intrinsic".
+        /// </summary>
+        public Dictionary<string, SortedDictionary<string, List<string>>> SkippedMethods { get; } = new Dictionary<string, SortedDictionary<string, List<string>>>();
+
+        private void NoteSkipped(string assName, string reason, MethodDef method)
+        {
+            if (!method.HasBody)
+                return;
+            if (!SkippedMethods.TryGetValue(assName, out var byReason))
+                SkippedMethods[assName] = byReason = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
+            if (!byReason.TryGetValue(reason, out var list))
+                byReason[reason] = list = new List<string>();
+            list.Add(method.FullName);
+        }
+
         private void TryAddMonoPInvokeCallbackPlan(List<MethodDefPlan> monoPInvokeCallbackPlans, MethodDef method)
         {
             var ca = method.CustomAttributes.FirstOrDefault(MetaUtil.IsMonoPInvokeCallbackAttribute);
@@ -85,10 +102,18 @@ namespace LeanAOT.GenerationPlan
                     classPlans.Add(classPlan);
                     foreach (var method in type.Methods)
                     {
-                        if (method.IsRuntime || method.IsAbstract || method.HasGenericParameters || method.DeclaringType.HasGenericParameters)
+                        if (method.IsRuntime || method.IsAbstract)
                             continue;
+                        if (method.HasGenericParameters || method.DeclaringType.HasGenericParameters)
+                        {
+                            NoteSkipped(assName, method.HasGenericParameters ? "generic method" : "generic type", method);
+                            continue;
+                        }
                         if (method.HasBody && method.Body.HasExceptionHandlers)
+                        {
+                            NoteSkipped(assName, "exception handlers", method);
                             continue;
+                        }
                         // don't aot System.String's constructor, because we will handle it in a special way
                         if (!method.HasBody && method.IsConstructor && type.FullName == "System.String")
                         {
@@ -96,6 +121,7 @@ namespace LeanAOT.GenerationPlan
                         }
                         if (method.CallingConvention == CallingConvention.VarArg)
                         {
+                            NoteSkipped(assName, "vararg", method);
                             s_logger.Warn($"Skip method with vararg calling convention: {method.FullName} token: {method.MDToken}");
                             continue;
                         }
@@ -121,6 +147,7 @@ namespace LeanAOT.GenerationPlan
 
                         if (args.ShouldSkipUnsupportedRuntimeMethod?.Invoke(method) == true)
                         {
+                            NoteSkipped(assName, "unsupported intrinsic", method);
                             s_logger.Debug($"[Manifest] Skip method (unsupported runtime intrinsic): {method.FullName} token: {method.MDToken}");
                             continue;
                         }
@@ -130,6 +157,7 @@ namespace LeanAOT.GenerationPlan
                         {
                             if (args.PgoIncludeIndex == null || !args.PgoIncludeIndex.Contains(assName, method))
                             {
+                                NoteSkipped(assName, "rules", method);
                                 s_logger.Debug($"[Manifest] Skip method (AOT rules): {method.FullName} token: {method.MDToken}");
                                 continue;
                             }
@@ -140,6 +168,10 @@ namespace LeanAOT.GenerationPlan
                     }
                 }
                 var assPlan = new AssemblyPlan(mod, assName, classPlans, methodPlans, monoPInvokeCallbackPlans);
+                if (SkippedMethods.TryGetValue(assName, out var skipped))
+                {
+                    s_logger.Info($"[Manifest] {assName}: {methodPlans.Count} methods AOT, interpreted: {string.Join(", ", skipped.Select(kv => $"{kv.Value.Count} {kv.Key}"))}");
+                }
 
                 _assemblyPlans[assName] = assPlan;
             }

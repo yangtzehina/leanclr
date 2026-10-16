@@ -34,9 +34,20 @@ struct ExportOptions
     size_t top_n = 0;
 };
 
+// Calls that cross between the interpreter and AOT code (LEANCLR_PGO_PROFILE builds; AOT coverage reports).
+enum class Transition : uint8_t
+{
+    InterpToAot,    // interpreted code called a method that runs as AOT code
+    IntoInterpreter, // the interpreter was entered from native code (host call, AOT code's direct-call bridge, icall callback)
+    Count,
+};
+
 class Profile
 {
   public:
+    static void inc_transition(Transition t) noexcept;
+    static uint64_t get_transition_count(Transition t) noexcept;
+
     static bool is_enabled() noexcept;
     static void set_enabled(bool enabled) noexcept;
 

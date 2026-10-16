@@ -113,6 +113,10 @@ inline void set_stack_value_at(RtStackObject* base, size_t index, T value)
 static RtResultVoid invoke_non_interp_method_with_roots(const metadata::RtMethodInfo* method, metadata::RtManagedMethodPointer method_ptr,
                                                         RtStackObject* frame_base)
 {
+#if LEANCLR_PGO_PROFILE
+    if (method->invoker_type == metadata::RtInvokerType::Aot || method->invoker_type == metadata::RtInvokerType::AotVirtualAdjustThunk)
+        profile::Profile::inc_transition(profile::Transition::InterpToAot);
+#endif
     MachineState& ms = MachineState::get_global_machine_state();
     uint32_t old_frame_top = ms.enter_frame_from_icall_or_intrinsic(
         method, frame_base, static_cast<uint32_t>(method->total_arg_stack_object_size), InterpFrameRootScanMode::MethodArguments);
@@ -589,6 +593,9 @@ T* get_static_field_address(const metadata::RtFieldInfo* field)
 RtResult<const RtStackObject*> Interpreter::execute(const metadata::RtMethodInfo* method, const interp::RtStackObject* params,
                                                     int32_t vararg_count)
 {
+#if LEANCLR_PGO_PROFILE
+    profile::Profile::inc_transition(profile::Transition::IntoInterpreter);
+#endif
     MachineState& ms = MachineState::get_global_machine_state();
     MachineStateSavePoint sp(ms);
     DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL3(InterpFrame*, frame, ms.enter_frame_from_native(method, params, vararg_count));

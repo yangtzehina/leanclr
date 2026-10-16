@@ -8,6 +8,7 @@
 
 #include "metadata/metadata_name.h"
 #include "metadata/module_def.h"
+#include "interp/interp_defs.h"
 #include "utils/string_builder.h"
 
 namespace leanclr
@@ -24,7 +25,37 @@ struct ExportCandidate
     std::string signature;
     uint64_t calls;
     uint64_t cost;
+    bool aot;
+    const char* why; // interpreted methods: why no AOT code ran ("" for AOT)
 };
+
+// AOT coverage: did the method run as AOT code, and if not, the first reason that applies.
+bool is_aot_method(const metadata::RtMethodInfo* method)
+{
+    return method->invoker_type == metadata::RtInvokerType::Aot || method->invoker_type == metadata::RtInvokerType::AotVirtualAdjustThunk;
+}
+
+const char* interpreted_reason(const metadata::RtMethodInfo* method)
+{
+    if (is_aot_method(method))
+    {
+        return "";
+    }
+    if (method->generic_method != nullptr || method->generic_container != nullptr || method->parent->generic_container != nullptr ||
+        (method->parent->by_val != nullptr && method->parent->by_val->ele_type == metadata::RtElementType::GenericInst))
+    {
+        return "generic";
+    }
+    if (method->interp_data != nullptr && method->interp_data->exception_clause_count > 0)
+    {
+        return "eh";
+    }
+    if (method->parent->image == nullptr || method->parent->image->get_aot_module_data() == nullptr)
+    {
+        return "module";
+    }
+    return "other";
+}
 
 bool g_enabled = true;
 std::vector<ProfileSlot> g_slots;
@@ -123,6 +154,8 @@ std::vector<ExportCandidate> collect_candidates(const ExportOptions& options, Ca
             signature_result.unwrap(),
             calls,
             cost,
+            is_aot_method(method),
+            interpreted_reason(method),
         });
     }
 
@@ -176,6 +209,14 @@ std::string build_candidates_json(const std::vector<ExportCandidate>& candidates
         json.append(std::to_string(candidate.calls));
         json.append(",\"cost\":");
         json.append(std::to_string(candidate.cost));
+        json.append(",\"aot\":");
+        json.append(candidate.aot ? "true" : "false");
+        if (!candidate.aot)
+        {
+            json.append(",\"why\":\"");
+            json.append(candidate.why);
+            json.push_back('"');
+        }
         json.push_back('}');
     }
     json.append("\n]");
@@ -294,9 +335,35 @@ void Profile::reset_period() noexcept
 #endif
 }
 
+#if LEANCLR_PGO_PROFILE
+static uint64_t g_transitions[static_cast<size_t>(Transition::Count)] = {};
+#endif
+
+void Profile::inc_transition(Transition t) noexcept
+{
+#if LEANCLR_PGO_PROFILE
+    if (g_enabled)
+        g_transitions[static_cast<size_t>(t)]++;
+#else
+    (void)t;
+#endif
+}
+
+uint64_t Profile::get_transition_count(Transition t) noexcept
+{
+#if LEANCLR_PGO_PROFILE
+    return g_transitions[static_cast<size_t>(t)];
+#else
+    (void)t;
+    return 0;
+#endif
+}
+
 void Profile::reset_global() noexcept
 {
 #if LEANCLR_PGO_PROFILE
+    for (uint64_t& n : g_transitions)
+        n = 0;
     for (ProfileSlot& slot : g_slots)
     {
         slot.period_calls = 0;
