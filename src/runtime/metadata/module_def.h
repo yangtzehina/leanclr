@@ -266,6 +266,7 @@ class RtModuleDef
 
     RtResult<RtClass*> get_class_by_type_ref_rid(uint32_t rid);
     RtResult<uint32_t> get_type_def_gid_by_type_ref_rid(uint32_t rid);
+    RtResult<uint32_t> get_type_def_gid_by_type_ref_rid_uncached(uint32_t rid);
     RtResult<const RtTypeSig*> get_type_spec_typesig_by_rid(uint32_t rid, const RtGenericContainerContext& gcc, const RtGenericContext* gc);
     RtResult<const RtTypeSig*> get_typesig_by_type_def_ref_spec_token(const RtToken& token, const RtGenericContainerContext& gcc, const RtGenericContext* gc);
     RtResult<RtClass*> get_class_by_type_spec_rid(uint32_t rid, const RtGenericContainerContext& gcc, const RtGenericContext* gc);
@@ -431,6 +432,9 @@ class RtModuleDef
     utils::HashMap<uint32_t, RtGenericContainer*> _genericContainers;
     RtTypeSig* _genericParamByValTypeSigs{};
     RtTypeSig* _genericParamByRefTypeSigs{};
+    // TypeRef rid -> resolved TypeDef gid + 1 (0 = not resolved yet); resolving by name is a string-keyed lookup in the
+    // referenced module (plus its exported-type forwarders), and the same TypeRefs are resolved over and over
+    uint32_t* _typeRefGids{};
 
     struct EnclosingTypeInfo
     {

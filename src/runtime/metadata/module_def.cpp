@@ -960,6 +960,30 @@ RtResult<RtClass*> RtModuleDef::get_class_by_type_ref_rid(uint32_t rid)
 
 RtResult<uint32_t> RtModuleDef::get_type_def_gid_by_type_ref_rid(uint32_t rid)
 {
+    const uint32_t type_ref_count = _cliImage.get_table_row_num(TableType::TypeRef);
+    if (rid == 0 || rid > type_ref_count)
+    {
+        return get_type_def_gid_by_type_ref_rid_uncached(rid);
+    }
+    if (_typeRefGids == nullptr)
+    {
+        _typeRefGids = _pool.calloc_any<uint32_t>(type_ref_count);
+    }
+    uint32_t& cached = _typeRefGids[rid - 1];
+    if (cached != 0)
+    {
+        RET_OK(cached - 1);
+    }
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(uint32_t, gid, get_type_def_gid_by_type_ref_rid_uncached(rid));
+    if (gid != UINT32_MAX)
+    {
+        cached = gid + 1;
+    }
+    RET_OK(gid);
+}
+
+RtResult<uint32_t> RtModuleDef::get_type_def_gid_by_type_ref_rid_uncached(uint32_t rid)
+{
     auto opt_row = _cliImage.read_type_ref(rid);
     if (!opt_row)
     {
