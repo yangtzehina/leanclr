@@ -26,6 +26,9 @@ namespace LeanAOT.GenerationPlan
         /// Optional runtime-profile gate for methods that must stay on the interpreter path.
         /// </summary>
         public Func<MethodDef, bool> ShouldSkipUnsupportedRuntimeMethod;
+
+        /// <summary>icall / P/Invoke methods to leave to the runtime's own invokers (no direct runtime API entry).</summary>
+        public Func<MethodDef, bool> ShouldSkipRuntimeResolvedNativeMethod;
     }
 
     public class Manifest
@@ -43,13 +46,14 @@ namespace LeanAOT.GenerationPlan
 
         /// <summary>
         /// Per assembly: why methods with IL bodies were left to the interpreter (reason -> method full names).
-        /// Reasons: "generic method", "generic type", "exception handlers", "vararg", "rules", "unsupported intrinsic".
+        /// Reasons: "generic method", "generic type", "exception handlers", "vararg", "rules", "unsupported intrinsic",
+        /// "icall / P/Invoke resolved at run time" (no IL body; listed so reports can count them).
         /// </summary>
         public Dictionary<string, SortedDictionary<string, List<string>>> SkippedMethods { get; } = new Dictionary<string, SortedDictionary<string, List<string>>>();
 
-        private void NoteSkipped(string assName, string reason, MethodDef method)
+        private void NoteSkipped(string assName, string reason, MethodDef method, bool native = false)
         {
-            if (!method.HasBody)
+            if (!method.HasBody && !native)
                 return;
             if (!SkippedMethods.TryGetValue(assName, out var byReason))
                 SkippedMethods[assName] = byReason = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
@@ -140,6 +144,11 @@ namespace LeanAOT.GenerationPlan
                         }
                         if (method.IsPinvokeImpl || method.IsInternalCall)
                         {
+                            if (args.ShouldSkipRuntimeResolvedNativeMethod?.Invoke(method) == true)
+                            {
+                                NoteSkipped(assName, "icall / P/Invoke resolved at run time", method, native: true);
+                                continue;
+                            }
                             // aot or intrinsic methods must be aot
                             TryAddMethodPlan(methodPlans, methodsInAotPlan, method);
                             continue;

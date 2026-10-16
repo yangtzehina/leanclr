@@ -683,6 +683,7 @@ internal class Program
             AotRulesEvaluator = aotRules,
             PgoIncludeIndex = pgoIncludeIndex,
             ShouldSkipUnsupportedRuntimeMethod = method => ShouldSkipUnsupportedRuntimeIntrinsic(method, runtimeApiCatalog),
+            ShouldSkipRuntimeResolvedNativeMethod = method => ShouldSkipRuntimeResolvedNative(method, runtimeApiCatalog),
         };
         var manifest = new Manifest(manifestArgs);
 
@@ -786,6 +787,20 @@ internal class Program
         }
 
         return !method.IsConstructor || !runtimeApiCatalog.TryGetIcallOrIntrinsicNewobj(method, out _, out _);
+    }
+
+    // An icall without a runtime API catalog entry (icalls.json) would get a wrapper that looks the function up by name
+    // and calls it with a C signature derived from the managed one, but this runtime registers icall functions as
+    // RtResult-returning C++ functions: in wasm that is a call_indirect signature trap (Monitor.Enter ->
+    // TryEnter_FastPath). A P/Invoke wrapper calls a native function pointer, but most QCalls here are registered only
+    // as invokers (no function pointer), so the wrapper, which the shim prefers over the P/Invoke invoker, would throw
+    // EntryPointNotFound where the interpreter succeeds. Both stay with the runtime's invokers; AOT code reaches them
+    // through a direct-call bridge like any interpreted method.
+    private static bool ShouldSkipRuntimeResolvedNative(MethodDef method, RuntimeApiCatalog runtimeApiCatalog)
+    {
+        if (method.IsPinvokeImpl)
+            return true;
+        return method.IsInternalCall && !runtimeApiCatalog.TryGetIcallOrIntrinsic(method, out _, out _);
     }
 
     private static bool IsIntrinsicAttribute(CustomAttribute attribute)
