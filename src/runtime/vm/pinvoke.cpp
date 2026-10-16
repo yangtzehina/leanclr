@@ -43,17 +43,28 @@ static bool is_coreclr_generated_pinvoke_wrapper(const metadata::RtMethodInfo* m
 // ("<X>g____PInvoke|296_0" on the Windows CoreLib, "|65_0" on Linux). Also index every key with "|<n>_<n>" removed.
 static std::string lcw_strip_ordinal(const char* s)
 {
+    // copies runs between the stripped ordinals (char-by-char push_back was a measurable part of runtime init)
     std::string r;
+    r.reserve(std::strlen(s));
+    const char* run = s;
     for (const char* p = s; *p;)
     {
         if (*p == '|' && p[1] >= '0' && p[1] <= '9')
         {
             const char* q = p + 1;
             while (*q >= '0' && *q <= '9') q++;
-            if (*q == '_') { q++; while (*q >= '0' && *q <= '9') q++; p = q; continue; }
+            if (*q == '_')
+            {
+                q++;
+                while (*q >= '0' && *q <= '9') q++;
+                r.append(run, static_cast<size_t>(p - run));
+                run = p = q;
+                continue;
+            }
         }
-        r.push_back(*p++);
+        p++;
     }
+    r.append(run);
     return r;
 }
 
@@ -61,6 +72,8 @@ void PInvokes::register_pinvoke(const char* name, PInvokeFunction func, PInvokeI
 {
     assert(g_internalcall_map.find(name) == g_internalcall_map.end() && "PInvoke already registered");
     g_internalcall_map[name] = PInvokeRegistry{func, invoker};
+    if (std::strchr(name, '|') == nullptr)
+        return; // nothing to strip (most keys); building the copy char by char is a measurable part of runtime init
     std::string n = lcw_strip_ordinal(name);
     if (n != name && g_internalcall_map.find(n.c_str()) == g_internalcall_map.end())
     {

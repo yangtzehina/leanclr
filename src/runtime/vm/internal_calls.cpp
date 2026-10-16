@@ -7,6 +7,7 @@
 #include "metadata/metadata_name.h"
 #include "icalls/internal_call_stubs.h"
 #include "const_strs.h"
+#include "utils/method_name_filter.h"
 
 #include <cstring>
 
@@ -21,6 +22,9 @@ static utils::HashMap<const char*, InternalCallRegistry, utils::CStrHasher, util
 static utils::HashMap<const char*, InternalCallInvoker, utils::CStrHasher, utils::CStrCompare> g_newobjInternalCallMap;
 static utils::Vector<InternalCallInvoker> g_internalCallInvokerIdList;
 static utils::HashMap<InternalCallInvoker, uint16_t> g_internalCallInvokerIdMap;
+// method names that can match a g_internalCallMap / g_newobjInternalCallMap key (see MethodNameFilter)
+static utils::MethodNameFilter g_internalCallNames;
+static utils::MethodNameFilter g_newobjInternalCallNames;
 
 static bool starts_with(const char* value, const char* prefix) noexcept
 {
@@ -82,6 +86,7 @@ void InternalCalls::register_internal_call(const char* name, InternalCallFunctio
 {
     assert(g_internalCallMap.find(name) == g_internalCallMap.end() && "Internal call already registered");
     g_internalCallMap[name] = InternalCallRegistry{func, invoker};
+    g_internalCallNames.add_key(name);
 }
 
 // Get internal call by name
@@ -96,6 +101,8 @@ const InternalCallRegistry* InternalCalls::get_internal_call(const char* name)
 // Get internal call by method info (builds full method name with params)
 RtResult<const InternalCallRegistry*> InternalCalls::get_internal_call_by_method(const metadata::RtMethodInfo* method)
 {
+    if (!g_internalCallNames.may_match(method->parent->name, method->name))
+        RET_OK(nullptr);
     // Try with full method name (including parameters)
     utils::Utf8StringBuilder sb;
     {
@@ -123,6 +130,7 @@ void InternalCalls::register_newobj_internal_call(const char* name, InternalCall
 {
     assert(g_newobjInternalCallMap.find(name) == g_newobjInternalCallMap.end() && "Newobj internal call already registered");
     g_newobjInternalCallMap[name] = invoker;
+    g_newobjInternalCallNames.add_key(name);
 }
 
 // Get newobj internal call by name
@@ -137,6 +145,8 @@ InternalCallInvoker InternalCalls::get_newobj_internal_call(const char* name)
 // Get newobj internal call by method info
 RtResult<InternalCallInvoker> InternalCalls::get_newobj_internal_call_by_method(const metadata::RtMethodInfo* method)
 {
+    if (!g_newobjInternalCallNames.may_match(method->parent->name, method->name))
+        RET_OK((InternalCallInvoker) nullptr);
     utils::Utf8StringBuilder sb;
     // Try with full method name (including parameters)
     {

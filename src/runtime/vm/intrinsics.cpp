@@ -7,6 +7,7 @@
 #include "metadata/metadata_name.h"
 #include "intrinsics/intrinsic_stubs.h"
 #include "const_strs.h"
+#include "utils/method_name_filter.h"
 
 #include <cstring>
 
@@ -20,6 +21,9 @@ static utils::HashMap<const char*, IntrinsicRegistry, utils::CStrHasher, utils::
 static utils::HashMap<const char*, IntrinsicInvoker, utils::CStrHasher, utils::CStrCompare> g_newobjIntrinsicMap;
 static utils::Vector<IntrinsicInvoker> g_intrinsicInvokerIdList;
 static utils::HashMap<IntrinsicInvoker, uint16_t> g_intrinsicInvokerIdMap;
+// method names that can match a g_intrinsicMap / g_newobjIntrinsicMap key (see MethodNameFilter)
+static utils::MethodNameFilter g_intrinsicNames;
+static utils::MethodNameFilter g_newobjIntrinsicNames;
 
 static bool is_coreclr_corlib_method(const metadata::RtMethodInfo* method) noexcept
 {
@@ -76,6 +80,7 @@ void Intrinsics::register_intrinsic(const char* name, IntrinsicFunction func, In
 {
     assert(g_intrinsicMap.find(name) == g_intrinsicMap.end() && "Intrinsic already registered");
     g_intrinsicMap[name] = IntrinsicRegistry{func, invoker};
+    g_intrinsicNames.add_key(name);
 }
 
 // Get intrinsic by name and length
@@ -132,6 +137,15 @@ RtResult<const IntrinsicRegistry*> Intrinsics::get_intrinsic_by_method(const met
         reinterpret_cast<IntrinsicFunction>(get_runtime_intrinsics_is_supported_false_invoker),
         get_runtime_intrinsics_is_supported_false_invoker};
 
+    if (!g_intrinsicNames.may_match(method->parent->name, method->name))
+    {
+        if (is_runtime_intrinsics_is_supported(method))
+        {
+            RET_OK(&runtime_intrinsics_is_supported_false);
+        }
+        RET_OK(nullptr);
+    }
+
     utils::Utf8StringBuilder sb;
 
     {
@@ -172,6 +186,7 @@ void Intrinsics::register_newobj_intrinsic(const char* name, IntrinsicInvoker in
 {
     assert(g_newobjIntrinsicMap.find(name) == g_newobjIntrinsicMap.end() && "Newobj intrinsic already registered");
     g_newobjIntrinsicMap[name] = invoker;
+    g_newobjIntrinsicNames.add_key(name);
 }
 
 // Get newobj intrinsic by name and length
@@ -186,6 +201,8 @@ IntrinsicInvoker Intrinsics::get_newobj_intrinsic(const char* name)
 // Get newobj intrinsic by method info
 RtResult<IntrinsicInvoker> Intrinsics::get_newobj_intrinsic_by_method(const metadata::RtMethodInfo* method)
 {
+    if (!g_newobjIntrinsicNames.may_match(method->parent->name, method->name))
+        RET_OK((IntrinsicInvoker) nullptr);
     utils::Utf8StringBuilder sb;
 
     {

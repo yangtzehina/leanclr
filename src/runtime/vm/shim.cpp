@@ -436,12 +436,12 @@ RtResult<InvokeTypeAndMethod> Shim::get_invoker(const metadata::RtMethodInfo* me
     {
     case metadata::RtMethodImplAttribute::IlOrManaged:
     {
-        // Try internal call first
+        // Try internal call first (the lookup is pre-filtered by name and cheap when nothing matches, so the
+        // string comparisons of the legacy exceptions only run for the few methods that have an entry)
 
-        if (!should_skip_legacy_il_internal_call(method))
         {
             DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL3(const InternalCallRegistry*, icall_entry, InternalCalls::get_internal_call_by_method(method));
-            if (icall_entry)
+            if (icall_entry && !should_skip_legacy_il_internal_call(method))
             {
                 RET_OK(InvokeTypeAndMethod(RtInvokerType::InternalCall, icall_entry->invoker));
             }
