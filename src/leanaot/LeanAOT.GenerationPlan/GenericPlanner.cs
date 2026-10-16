@@ -261,7 +261,7 @@ namespace LeanAOT.GenerationPlan
             {
                 _rejected[gi.RidKey] = reason;
                 NoteSkipped(reason, gi);
-                if (reason == "exception handlers")
+                if (reason == "exception handlers" || reason == "exception filter")
                 {
                     // interpreted, but what it calls can still be compiled
                     _interpretedScans.Enqueue(gi);
@@ -282,8 +282,9 @@ namespace LeanAOT.GenerationPlan
                 return "static constructor";
             if (def.CallingConvention == CallingConvention.VarArg)
                 return "vararg";
-            if (def.Body.HasExceptionHandlers)
-                return "exception handlers";
+            string ehSkipReason = MetaUtil.GetExceptionHandlerSkipReason(def);
+            if (ehSkipReason != null)
+                return ehSkipReason;
             if (_args.IsRuntimeImplemented?.Invoke(def) == true)
                 return "runtime intrinsic";
             if (_args.ShouldSkipUnsupportedRuntimeMethod?.Invoke(def) == true)

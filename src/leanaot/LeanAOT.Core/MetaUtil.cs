@@ -19,6 +19,7 @@
 // SOFTWARE.
 
 using dnlib.DotNet;
+using dnlib.DotNet.Emit;
 using System.Diagnostics;
 using System.Text;
 
@@ -27,6 +28,28 @@ namespace LeanAOT.Core
 
     public static class MetaUtil
     {
+        /// <summary>
+        /// Whether methods with try/catch/finally/fault clauses are compiled (the AOT writer lowers them to a per-method
+        /// dispatcher). Filter clauses (<c>catch ... when</c>) always stay interpreted. Off: every method with exception
+        /// handlers stays interpreted, as before.
+        /// </summary>
+        public static bool CompileExceptionHandlers { get; set; } = true;
+
+        /// <summary>Why a method body's exception handlers keep it interpreted, or null when they don't.</summary>
+        public static string GetExceptionHandlerSkipReason(MethodDef method)
+        {
+            if (!method.HasBody || !method.Body.HasExceptionHandlers)
+                return null;
+            if (!CompileExceptionHandlers)
+                return "exception handlers";
+            foreach (var eh in method.Body.ExceptionHandlers)
+            {
+                if (eh.HandlerType == ExceptionHandlerType.Filter)
+                    return "exception filter";
+            }
+            return null;
+        }
+
         private static readonly HashSet<string> s_defaultCoreLibraryModules = new HashSet<string>(StringComparer.Ordinal)
         {
             "System.Private.CoreLib",

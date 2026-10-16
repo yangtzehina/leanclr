@@ -99,6 +99,11 @@ namespace LeanAOT.ToCpp
         public const string GOTO_ASSIGN_OR_THROW = "LEANCLR_CODEGEN_GOTO_ASSIGN_OR_THROW_ON_ERROR";
         public const string GOTO_THROW_RUNTIME_ERROR = "LEANCLR_CODEGEN_GOTO_THROW_RUNTIME_ERROR";
         public const string GOTO_CHECK_NULL_REFERENCE = "LEANCLR_CODEGEN_GOTO_CHECK_NOT_NULL_OR_THROW_NULL_REFERENCE_EXCEPTION";
+        public const string GOTO_THROW_EXCEPTION = "LEANCLR_CODEGEN_GOTO_THROW_EXCEPTION";
+        public const string GOTO_RETHROW_EXCEPTION = "LEANCLR_CODEGEN_GOTO_RETHROW_EXCEPTION";
+        public const string AotEhTakeException = "leanclr::codegen::aot_eh_take_exception";
+        public const string AotEhUnhandled = "leanclr::codegen::aot_eh_unhandled";
+        public const string AotEhLeaveCatch = "leanclr::codegen::aot_eh_leave_catch";
         public const string PROFILE_INC_CALL_COUNT = "LEANCLR_CODEGEN_PROFILE_INC_CALL_COUNT";
         public const string PROFILE_ADD_COST = "LEANCLR_CODEGEN_PROFILE_ADD_COST";
 

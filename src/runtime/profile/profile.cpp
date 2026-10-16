@@ -53,13 +53,15 @@ const char* interpreted_reason(const metadata::RtMethodInfo* method)
     {
         return "generic";
     }
-    if (method->interp_data != nullptr && method->interp_data->exception_clause_count > 0)
-    {
-        return "eh";
-    }
     if (method->parent->image == nullptr || method->parent->image->get_aot_module_data() == nullptr)
     {
         return "module";
+    }
+    // compiled modules handle try / catch / finally / fault; a filter clause (or LeanAOT --leanaot-no-exception-handlers)
+    // keeps the method interpreted
+    if (method->interp_data != nullptr && method->interp_data->exception_clause_count > 0)
+    {
+        return "eh";
     }
     return "other";
 }

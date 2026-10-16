@@ -419,7 +419,14 @@ namespace LeanAOT.ToCpp
             {
                 _tailWriter.AddLine($"{GetHandleReturnErrorLabelName()}:");
                 _tailWriter.AddLine($"assert({GetRetErrorVariableName()} != {ConstStrings.RtErrTypeName}::None);");
-                _tailWriter.AddLine($"LEANCLR_CODEGEN_THROW_RUNTIME_ERROR({GetRetErrorVariableName()}, {CurMethodVar.GetFullReferenceVariableName()}, {GetRetErrorIpVariableName()});");
+                if (HasExceptionHandlers)
+                {
+                    WriteExceptionDispatcher();
+                }
+                else
+                {
+                    _tailWriter.AddLine($"LEANCLR_CODEGEN_THROW_RUNTIME_ERROR({GetRetErrorVariableName()}, {CurMethodVar.GetFullReferenceVariableName()}, {GetRetErrorIpVariableName()});");
+                }
             }
             _tailWriter.DecreaseIndent();
         }
@@ -2967,12 +2974,13 @@ namespace LeanAOT.ToCpp
         private void EmitThrow(Instruction inst)
         {
             var exObj = Pop();
-            _bodyWriter.AddLine($"{VmFunctionNames.THROW_EXCEPTION}({GetEvalVariableName(exObj)}, {CurMethodVar.GetFullReferenceVariableName()}, {GetCurrentIpOffset(inst)});");
+            // with handlers in this method the exception goes through the dispatcher instead of returning at once
+            _bodyWriter.AddLine($"{(HasExceptionHandlers ? VmFunctionNames.GOTO_THROW_EXCEPTION : VmFunctionNames.THROW_EXCEPTION)}({GetEvalVariableName(exObj)}, {CurMethodVar.GetFullReferenceVariableName()}, {GetCurrentIpOffset(inst)});");
         }
 
         private void EmitRethrow(Instruction inst)
         {
-            throw new NotSupportedException();
+            EmitRethrowImpl(inst);
         }
 
         private void EmitLdfld(Instruction inst, IField field)
@@ -3497,12 +3505,12 @@ namespace LeanAOT.ToCpp
 
         private void EmitLeave(Instruction inst, Instruction operand)
         {
-            throw new NotImplementedException("leave is not implemented");
+            EmitLeaveImpl(inst, operand);
         }
 
         private void EmitEndfinally(Instruction inst)
         {
-            throw new NotImplementedException("endfinally is not implemented");
+            EmitEndfinallyImpl(inst);
         }
 
         private void EmitRefanyval(Instruction inst, ITypeDefOrRef inflatedType, uint inlineToken)
@@ -3608,6 +3616,14 @@ namespace LeanAOT.ToCpp
             }
         }
 
+        private void MapGenericOperandToken(object inflated, uint originalToken)
+        {
+            if (_method.IsGeneric)
+            {
+                _runtimeResolvedMetadatas.MapOperand(inflated, originalToken);
+            }
+        }
+
         private void SetPrefixConstrainedData(ITypeDefOrRef constrainedType, uint token)
         {
             _curPrefixs |= PrefixFlags.Constrained;
@@ -3644,6 +3660,7 @@ namespace LeanAOT.ToCpp
                     _instToBbMap[inst] = bb;
                 }
             }
+            PrepareExceptionHandling(body);
 
             bool methodHasReturnValue = !_method.IsVoidReturn;
             foreach (BasicBlock block in basicBlockCollection.Blocks)

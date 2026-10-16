@@ -317,6 +317,27 @@
         retVar = (retType)__result.unwrap();                                                              \
     } while (0)
 
+// A throw / rethrow inside a method with exception handlers: raise, then let the method's dispatcher
+// (___label_handle_return_error) look for a clause instead of returning at once.
+#define LEANCLR_CODEGEN_GOTO_THROW_EXCEPTION(ex, methodInfo, ip)                                   \
+    do                                                                                             \
+    {                                                                                              \
+        LEANCLR_CODEGEN_GOTO_CHECK_NOT_NULL_OR_THROW_NULL_REFERENCE_EXCEPTION(ex, methodInfo, ip); \
+        leanclr::vm::Exception::raise_aot_exception((leanclr::vm::RtException*)(ex), methodInfo, ip); \
+        ___ret_err = leanclr::RtErr::ManagedException;                                             \
+        ___ret_ip = ip;                                                                            \
+        LEANCLR_CODEGEN_GOTO_HANDLE_RETURN_ERROR();                                                \
+    } while (0)
+
+#define LEANCLR_CODEGEN_GOTO_RETHROW_EXCEPTION(ex, methodInfo, ip)                                 \
+    do                                                                                             \
+    {                                                                                              \
+        leanclr::vm::Exception::raise_aot_exception((leanclr::vm::RtException*)(ex), methodInfo, ip); \
+        ___ret_err = leanclr::RtErr::ManagedException;                                             \
+        ___ret_ip = ip;                                                                            \
+        LEANCLR_CODEGEN_GOTO_HANDLE_RETURN_ERROR();                                                \
+    } while (0)
+
 #define LEANCLR_CODEGEN_ICALL_TRY_BEGIN() \
     try                                   \
     {
@@ -694,6 +715,27 @@ inline RtResult<const metadata::RtMethodInfo*> get_virtual_method_impl(vm::RtObj
 // One callvirt site of generated code (a zero-initialized static next to the call): the class seen last and the
 // implementation the runtime resolved for it. get_virtual_method_impl_on_klass is a pure function of (class, method)
 // (generic instantiations come from the pool), so a hit is the same answer without the interface walk.
+// Exception dispatch in compiled methods with handlers (see MethodWriterBase.ExceptionHandling.cs).
+// The exception an error stands for: a new one for a runtime error, the current one for ManagedException.
+inline vm::RtObject* aot_eh_take_exception(RtErr err, const metadata::RtMethodInfo* method, int32_t ip) noexcept
+{
+    return reinterpret_cast<vm::RtObject*>(vm::Exception::raise_aot_error_as_exception(err, method, ip));
+}
+
+// No clause took it: it propagates to the caller as the current exception (a handler that ran meanwhile may have
+// raised and caught another one), as the interpreter does when it leaves the frame.
+inline RtErr aot_eh_unhandled(vm::RtObject* ex) noexcept
+{
+    vm::Exception::set_current_exception(reinterpret_cast<vm::RtException*>(ex));
+    return RtErr::ManagedException;
+}
+
+// Leaving a catch handler: the exception is handled (the interpreter's pop_throw_flow).
+inline void aot_eh_leave_catch(vm::RtObject* ex) noexcept
+{
+    vm::Exception::clear_current_exception_if_matches(reinterpret_cast<vm::RtException*>(ex));
+}
+
 struct AotVirtualCallSite
 {
     const metadata::RtClass* klass;

@@ -128,6 +128,9 @@ internal class Program
         [Option("leanaot-no-generics", Required = false, HelpText = "LeanAOT-only: do not compile generic instantiations.")]
         public bool NoGenerics { get; set; }
 
+        [Option("leanaot-no-exception-handlers", Required = false, HelpText = "LeanAOT-only: leave every method with try/catch/finally/fault interpreted (default: compile them; filter clauses always stay interpreted).")]
+        public bool NoExceptionHandlers { get; set; }
+
         [Option("leanaot-generic-keys-to-names", Required = false, HelpText = "LeanAOT-only: convert runtime keys (one per line, file IN) to name keys (file OUT): IN:OUT. Needs -d only.")]
         public string GenericKeysToNames { get; set; }
 
@@ -674,6 +677,7 @@ internal class Program
     {
         var generator = new CppGenerator();
         var assemblyCache = new Core.AssemblyCache(new Core.MultiDirectoryAssemblyResolver(dllSearchPaths));
+        Core.MetaUtil.CompileExceptionHandlers = !il2CppOptions.NoExceptionHandlers;
 
         var rulePaths = (il2CppOptions.AotMethodRuleFiles ?? Enumerable.Empty<string>())
             .Where(s => !string.IsNullOrWhiteSpace(s))

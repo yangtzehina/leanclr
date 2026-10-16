@@ -60,12 +60,12 @@ namespace LeanAOT.GenerationPlan
 
         /// <summary>
         /// Per assembly: why methods with IL bodies were left to the interpreter (reason -> method full names).
-        /// Reasons: "generic method", "generic type", "exception handlers", "vararg", "rules", "unsupported intrinsic",
+        /// Reasons: "generic method", "generic type", "exception handlers" (switched off), "exception filter", "vararg", "rules", "unsupported intrinsic",
         /// "icall / P/Invoke resolved at run time" (no IL body; listed so reports can count them).
         /// </summary>
         public Dictionary<string, SortedDictionary<string, List<string>>> SkippedMethods { get; } = new Dictionary<string, SortedDictionary<string, List<string>>>();
 
-        // non-generic methods that stay interpreted only because of exception handlers (scanned for generic callees)
+        // non-generic methods that stay interpreted only because of their exception handlers (scanned for generic callees)
         private readonly List<MethodDef> _interpretedRoots = new List<MethodDef>();
 
         private void NoteSkipped(string assName, string reason, MethodDef method, bool native = false)
@@ -130,9 +130,10 @@ namespace LeanAOT.GenerationPlan
                             NoteSkipped(assName, method.HasGenericParameters ? "generic method" : "generic type", method);
                             continue;
                         }
-                        if (method.HasBody && method.Body.HasExceptionHandlers)
+                        string ehSkipReason = MetaUtil.GetExceptionHandlerSkipReason(method);
+                        if (ehSkipReason != null)
                         {
-                            NoteSkipped(assName, "exception handlers", method);
+                            NoteSkipped(assName, ehSkipReason, method);
                             // still runs (interpreted) and calls generic code: its callees belong to the static closure
                             if (args.AotRulesEvaluator == null || args.AotRulesEvaluator.ShouldIncludeByRules(assName, method) ||
                                 (args.PgoIncludeIndex != null && args.PgoIncludeIndex.Contains(assName, method)))
