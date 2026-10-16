@@ -933,6 +933,17 @@ struct RtAotAssemblyBinding
     uint8_t mvid[16];
 };
 
+// A closed generic instantiation compiled ahead of time (LeanAOT GenericPlanner). `key` is what
+// AotModule::format_generic_method_key computes for the inflated RtMethodInfo; `self_slot` is the global the generated code
+// reads its own RtMethodInfo from (the generic context its metadata is resolved with), set when the runtime binds the code
+// to a method and by compiled callers before they call it directly.
+struct RtAotGenericMethodData
+{
+    RtAotMethodDefData data; // token unused (0)
+    const char* key;
+    const RtMethodInfo** self_slot;
+};
+
 struct RtAotModuleData
 {
     const char* module_name;
@@ -945,6 +956,10 @@ struct RtAotModuleData
     // checked by AotModule::check_bindings before the module's AOT code is attached (see AotBindingPolicy)
     const RtAotAssemblyBinding* bindings;
     uint32_t binding_count;
+    // generic instantiations whose code lives in this module (it covers every assembly they involve); registered when the
+    // module's AOT code is attached
+    const RtAotGenericMethodData* generic_method_entries;
+    uint32_t generic_method_entry_count;
 };
 
 enum class AotBindingPolicy : uint8_t

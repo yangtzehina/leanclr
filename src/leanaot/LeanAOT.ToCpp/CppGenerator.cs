@@ -67,8 +67,83 @@ namespace LeanAOT.ToCpp
             return context;
         }
 
+        /// <summary>
+        /// Generates every planned generic instantiation once into a throw-away file part first: an instantiation whose
+        /// body the code generator cannot handle (an intrinsic it does not know with these arguments, metadata it cannot
+        /// name) is dropped from the plan before any caller decides to call it directly, so it simply stays interpreted.
+        /// Uses its own invoker / bridge services so the dry run leaves nothing behind in the output.
+        /// </summary>
+        protected override void Prepare()
+        {
+            var manifest = _config.manifest;
+            if (manifest.Generics == null)
+            {
+                return;
+            }
+            GlobalServices saved = GlobalServices.Inst;
+            GlobalServices.Inst = new GlobalServices
+            {
+                Config = saved.Config,
+                ManifestService = saved.ManifestService,
+                TypeNameService = saved.TypeNameService,
+                InvokerService = new InvokerService(saved.MetadataService),
+                DirectCallBridgeService = new DirectCallBridgeService(saved.MetadataService),
+                MonoPInvokeCallbackService = new MonoPInvokeCallbackService(saved.MetadataService),
+                MetadataService = saved.MetadataService,
+                RuntimeApiCatalog = saved.RuntimeApiCatalog,
+            };
+            int dropped = 0;
+            var whys = new Dictionary<string, int>(StringComparer.Ordinal);
+            var examples = new Dictionary<string, string>(StringComparer.Ordinal);
+            try
+            {
+                foreach (var gp in manifest.GenericMethodPlans.OrderBy(p => p.Inst.RidKey, StringComparer.Ordinal).ToList())
+                {
+                    GlobalServices.Inst.ManifestService.CurrentHome = gp.Home;
+                    var scratch = new ModuleMethodBodyCodeFilePart(Path.Combine(_config.outputCodeDir, "dry-run.cpp"), manifest.AssemblyPlans[gp.Home].Module);
+                    try
+                    {
+                        GenerateGenericMethod(gp, scratch);
+                    }
+                    catch (Exception e)
+                    {
+                        dropped++;
+                        string why = (e is NotSupportedException || e is NotImplementedException) ? e.Message : $"{e.GetType().Name}: {e.Message}";
+                        s_logger.Debug($"[Generics] dropped {gp.Inst}: {why}\n{e.StackTrace}");
+                        string shortWhy = $"{e.GetType().Name} at {e.StackTrace?.Split('\n').FirstOrDefault()?.Trim()}";
+                        whys[shortWhy] = whys.GetValueOrDefault(shortWhy) + 1;
+                        examples.TryAdd(shortWhy, $"{gp.Inst}: {why}\n{string.Join("\n", (e.StackTrace ?? "").Split('\n').Take(8))}");
+                        manifest.Generics.Drop(gp.Inst.RidKey, "not supported by the code generator");
+                    }
+                }
+            }
+            finally
+            {
+                GlobalServices.Inst = saved;
+                saved.ManifestService.CurrentHome = null;
+            }
+            s_logger.Info($"[Generics] dry run: {dropped} instantiations dropped, {manifest.Generics.Plans.Count} to generate");
+            foreach (var (why, n) in whys.OrderByDescending(kv => kv.Value).Take(12))
+            {
+                s_logger.Info($"[Generics]   {n} x {why}");
+                s_logger.Debug($"[Generics]     e.g. {examples[why]}");
+            }
+        }
+
+        private void GenerateGenericMethod(GenericMethodPlan gp, IMethodBodyCodeFilePart file)
+        {
+            var methodDetail = GlobalServices.Inst.MetadataService.GetMethodDetail(gp.Method);
+            GlobalServices.Inst.InvokerService.GetInvoker(gp.Method);
+            new MethodWriter(methodDetail, file).WriteCode();
+            if (methodDetail.ShouldGenerateVirtualMethod)
+            {
+                new VirtualMethodWriter(methodDetail, file).WriteCode();
+            }
+        }
+
         public override void GenerateAssembly(AssemblyPlan plan)
         {
+            GlobalServices.Inst.ManifestService.CurrentHome = plan.AssemblyName;
             GenerateModuleRegistrationHeader(plan);
             GenerateModuleRegistrationCpp(plan);
             GenerateModuleMethodBodyRegistrationCpp(plan);
@@ -106,6 +181,21 @@ namespace LeanAOT.ToCpp
                     assemblyContext = context,
                 };
                 GenerateMethodDef(methodPlan, methodCtx);
+            }
+            foreach (var gp in _config.manifest.GetGenericPlansForHome(plan.AssemblyName))
+            {
+                if (methodBodyCodeFile.ExceedsMaxSize())
+                {
+                    methodBodyCodeFile = context.CreateMethodBodyCodeFileForNextFile();
+                }
+                try
+                {
+                    GenerateGenericMethod(gp, methodBodyCodeFile);
+                }
+                catch (Exception e)
+                {
+                    throw new Exception($"Error generating instantiation {gp.Inst} (passed the dry run)", e);
+                }
             }
             context.SaveAll();
         }
@@ -174,6 +264,7 @@ namespace LeanAOT.ToCpp
 
         public override void GenerateGlobalInitializationCpp()
         {
+            GlobalServices.Inst.ManifestService.CurrentHome = null;
             GenerateAllModuleRegistrationCpp();
             GenerateAllMethodInvokerCpp();
             GenerateAllDirectCallBridgeCpp();

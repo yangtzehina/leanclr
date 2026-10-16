@@ -24,6 +24,10 @@ namespace LeanAOT.ToCpp
         public const string CCtor = ".cctor";
 
         public const string ResolveMetadataTokens = "leanclr::codegen::resolve_metadata_tokens";
+        public const string ResolveGenericMethodMetadataTokens = "leanclr::codegen::resolve_generic_method_metadata_tokens";
+        public const string BindAotGenericSelf = "leanclr::codegen::bind_aot_generic_self";
+        public const string ResolveConstrainedStaticMethod = "leanclr::codegen::resolve_constrained_static_method";
+        public const string ResolveConstrainedVirtualMethod = "leanclr::codegen::resolve_constrained_virtual_method";
 
         public const string IsCctorNotFinishied = "leanclr::codegen::is_cctor_not_finished";
         public const string RunClassStaticConstructor = "leanclr::codegen::run_class_static_constructor";

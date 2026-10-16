@@ -89,7 +89,14 @@ namespace LeanAOT.ToCpp
 
         public bool IsGeneric => _isGeneric;
 
-        public ModuleDef Module => _isGeneric ? null : _methodDef.Module;
+        /// <summary>The module of the definition: its tokens are what the body's operands name, also for an instantiation
+        /// (resolved there with the instantiation's own RtMethodInfo as generic context, see RuntimeResolvedMetadatas).</summary>
+        public ModuleDef Module => _methodDef.Module;
+
+        /// <summary>Instantiations only: the global that holds the instantiation's RtMethodInfo. The runtime sets it when it
+        /// binds the code to an inflated method (AotModule::find_aot_method_impl); compiled callers that call the code
+        /// directly set it before their first call (leanclr::codegen::bind_aot_generic_self).</summary>
+        public string SelfSlotName => $"{_uniqueName}__self";
 
         public ModuleDef ModuleOfMethodDef => _methodDef.Module;
 

@@ -31,6 +31,12 @@ class AotModule
     // "" or the reason the last module was rejected, e.g. "ET.Hotfix: ET.Model MVID 0123.. != generated 4567.."
     static const char* get_last_rejection();
     static void note_attached(const RtAotModuleData* aot_data);
+
+    // Generic instantiations: the key of a closed inflated method, computed from runtime type data only (assembly names,
+    // TypeDef / MethodDef row ids, element types); LeanAOT computes the same string from the DLLs (GenericInstantiation
+    // .RidKey). False when the method is not a closed instantiation or the key does not fit.
+    static bool format_generic_method_key(const RtMethodInfo* method, char* buf, size_t size);
+    static uint32_t get_attached_generic_method_count();
 };
 } // namespace metadata
 } // namespace leanclr

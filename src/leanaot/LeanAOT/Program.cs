@@ -119,6 +119,18 @@ internal class Program
         [Option("leanaot-exclude-assembly-from-global-metadata", Required = false, HelpText = "LeanAOT-only: assembly short name to omit from global-metadata.dat only (repeat for multiple); must appear in -a/--assembly list.")]
         public IEnumerable<string> AssembliesExcludedFromGlobalMetadata { get; set; }
 
+        [Option("leanaot-generic-list", Required = false, HelpText = "LeanAOT-only: closed generic instantiations to compile besides the static closure, one name key per line (repeatable).")]
+        public IEnumerable<string> GenericListFiles { get; set; }
+
+        [Option("leanaot-generic-exclude", Required = false, HelpText = "LeanAOT-only: leave generic instantiations whose method full name contains this string interpreted (repeatable).")]
+        public IEnumerable<string> GenericExcludes { get; set; }
+
+        [Option("leanaot-no-generics", Required = false, HelpText = "LeanAOT-only: do not compile generic instantiations.")]
+        public bool NoGenerics { get; set; }
+
+        [Option("leanaot-generic-keys-to-names", Required = false, HelpText = "LeanAOT-only: convert runtime keys (one per line, file IN) to name keys (file OUT): IN:OUT. Needs -d only.")]
+        public string GenericKeysToNames { get; set; }
+
         [Option("leanaot-enable-layout-validation", Required = false, HelpText = "LeanAOT-only: enable managed type layout validation in codegen (default off).")]
         public bool LeanAotEnableLayoutValidation { get; set; }
 
@@ -197,6 +209,12 @@ internal class Program
                 if (options.PrintCommandLine)
                 {
                     Console.WriteLine(string.Join(" ", effectiveArgs.Select(a => a.Contains(' ') ? $"\"{a}\"" : a)));
+                }
+
+                if (!string.IsNullOrWhiteSpace(options.GenericKeysToNames))
+                {
+                    exitCode = ConvertGenericKeys(options);
+                    return;
                 }
 
                 if (!TryNormalizeCli(options, out var dllSearchPaths, out var aotAssemblyNames, out var outputCodeDir, out var errorMessage))
@@ -684,6 +702,15 @@ internal class Program
             PgoIncludeIndex = pgoIncludeIndex,
             ShouldSkipUnsupportedRuntimeMethod = method => ShouldSkipUnsupportedRuntimeIntrinsic(method, runtimeApiCatalog),
             ShouldSkipRuntimeResolvedNativeMethod = method => ShouldSkipRuntimeResolvedNative(method, runtimeApiCatalog),
+            Generics = il2CppOptions.NoGenerics ? null : new GenericPlannerArgs
+            {
+                ListFiles = (il2CppOptions.GenericListFiles ?? Enumerable.Empty<string>())
+                    .Where(s => !string.IsNullOrWhiteSpace(s) && File.Exists(s.Trim()))
+                    .Select(s => Path.GetFullPath(s.Trim()))
+                    .ToList(),
+                IsRuntimeImplemented = IsRuntimeImplementedGeneric,
+                Exclude = (il2CppOptions.GenericExcludes ?? Enumerable.Empty<string>()).Where(s => !string.IsNullOrEmpty(s)).ToList(),
+            },
         };
         var manifest = new Manifest(manifestArgs);
 
@@ -723,12 +750,124 @@ internal class Program
         WriteManifestReport(Path.Combine(confBuilder.outputCodeDir, "manifest-report.json"), manifest);
     }
 
+    /// <summary>
+    /// Generic methods the runtime implements itself (intrinsics and icalls registered with a "&lt;&gt;" name in
+    /// src/runtime/intrinsics/*.cpp and src/runtime/icalls/*.cpp). Their IL bodies are placeholders or fallbacks, so an
+    /// instantiation is never compiled from them; compiled callers reach them through the runtime.
+    /// </summary>
+    private static readonly HashSet<string> s_runtimeImplementedGenerics = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "System.Activator::CreateInstance",
+        "System.Array::GetGenericValueImpl",
+        "System.Array::SetGenericValueImpl",
+        "System.Double::ConvertToIntegerNative",
+        "System.Single::ConvertToIntegerNative",
+        "System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan",
+        "System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable",
+        "System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences",
+        "System.Runtime.CompilerServices.Unsafe::Add",
+        "System.Runtime.CompilerServices.Unsafe::AddByteOffset",
+        "System.Runtime.CompilerServices.Unsafe::AreSame",
+        "System.Runtime.CompilerServices.Unsafe::As",
+        "System.Runtime.CompilerServices.Unsafe::AsPointer",
+        "System.Runtime.CompilerServices.Unsafe::AsRef",
+        "System.Runtime.CompilerServices.Unsafe::ByteOffset",
+        "System.Runtime.CompilerServices.Unsafe::Copy",
+        "System.Runtime.CompilerServices.Unsafe::IsAddressGreaterThan",
+        "System.Runtime.CompilerServices.Unsafe::IsAddressLessThan",
+        "System.Runtime.CompilerServices.Unsafe::ReadUnaligned",
+        "System.Runtime.CompilerServices.Unsafe::SizeOf",
+        "System.Runtime.CompilerServices.Unsafe::SkipInit",
+        "System.Runtime.CompilerServices.Unsafe::Subtract",
+        "System.Runtime.CompilerServices.Unsafe::SubtractByteOffset",
+        "System.Runtime.CompilerServices.Unsafe::Unbox",
+        "System.Runtime.CompilerServices.Unsafe::WriteUnaligned",
+        "System.Runtime.InteropServices.MemoryMarshal::GetArrayDataReference",
+        "System.Threading.Interlocked::CompareExchange",
+        "System.Threading.Interlocked::Exchange",
+        "System.Threading.Volatile::Read",
+        "System.Threading.Volatile::Write",
+    };
+
+    /// <summary>Also everything under System.Runtime.Intrinsics: the runtime answers IsSupported with false for all of
+    /// it (vm/intrinsics.cpp is_runtime_intrinsics_is_supported) where the IL would say true.
+    /// Other [Intrinsic] generic methods are compiled from their IL, which is what the interpreter runs for them too.</summary>
+    private static bool IsRuntimeImplementedGeneric(MethodDef method)
+    {
+        if (method.Module.Assembly.Name != LeanAOT.Core.GenericInstantiation.CoreLibName)
+            return false;
+        TypeDef root = method.DeclaringType;
+        while (root.DeclaringType != null)
+            root = root.DeclaringType;
+        return root.Namespace.StartsWith("System.Runtime.Intrinsics", StringComparison.Ordinal) ||
+            s_runtimeImplementedGenerics.Contains($"{method.DeclaringType.FullName}::{method.Name}");
+    }
+
+    /// <summary>--leanaot-generic-keys-to-names IN:OUT: runtime keys of instantiations (profile output, valid for the DLLs
+    /// in the -d directories) to name keys that stay valid when the DLLs are rebuilt.</summary>
+    private static int ConvertGenericKeys(CliOptions options)
+    {
+        string spec = options.GenericKeysToNames.Trim();
+        int sep = spec.LastIndexOf(':');
+        if (sep <= 0)
+        {
+            s_logger.Error("--leanaot-generic-keys-to-names expects IN:OUT");
+            return 1;
+        }
+        var dirs = (options.DllSearchPaths ?? Enumerable.Empty<string>()).Where(d => !string.IsNullOrWhiteSpace(d)).Select(d => Path.GetFullPath(d.Trim())).ToList();
+        var cache = new Core.AssemblyCache(new Core.MultiDirectoryAssemblyResolver(dirs));
+        var names = new SortedSet<string>(StringComparer.Ordinal);
+        int failed = 0;
+        foreach (string raw in File.ReadAllLines(spec.Substring(0, sep)))
+        {
+            string key = raw.Trim();
+            if (key.Length == 0 || key[0] == '#')
+                continue;
+            LeanAOT.Core.GenericInstantiation gi = null;
+            try
+            {
+                gi = LeanAOT.Core.GenericInstantiation.ParseRidKey(key, cache);
+            }
+            catch (Exception)
+            {
+            }
+            if (gi == null)
+            {
+                failed++;
+                continue;
+            }
+            names.Add(gi.NameKey);
+        }
+        File.WriteAllLines(spec.Substring(sep + 1), names);
+        Console.WriteLine($"generic keys: {names.Count} written, {failed} not resolved");
+        return 0;
+    }
+
     /// <summary>Which methods were compiled and why the others stay interpreted, per assembly (for coverage reports).</summary>
     private static void WriteManifestReport(string path, Manifest manifest)
     {
         var sb = new StringBuilder();
         sb.Append("{\n");
         bool firstAss = true;
+        if (manifest.Generics != null)
+        {
+            var plans = manifest.GenericMethodPlans.ToList();
+            sb.Append("  \"(generics)\": {\"aot\": ").Append(plans.Count);
+            sb.Append(", \"origins\": {").Append(string.Join(", ", plans.GroupBy(p => p.Origin).OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{JsonString(g.Key)}: {g.Count()}"))).Append('}');
+            sb.Append(", \"homes\": {").Append(string.Join(", ", plans.GroupBy(p => p.Home).OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{JsonString(g.Key)}: {g.Count()}"))).Append('}');
+            sb.Append(", \"list\": {\"entries\": ").Append(manifest.Generics.ListEntries).Append(", \"missing\": ").Append(manifest.Generics.ListEntriesMissing).Append('}');
+            sb.Append(", \"skipped\": {");
+            bool firstReason = true;
+            foreach (var (reason, methods) in manifest.Generics.Skipped)
+            {
+                sb.Append(firstReason ? "\n" : ",\n").Append("    ").Append(JsonString(reason)).Append(": [");
+                firstReason = false;
+                sb.Append(string.Join(", ", methods.Select(JsonString)));
+                sb.Append(']');
+            }
+            sb.Append(firstReason ? "}}" : "\n  }}");
+            firstAss = false;
+        }
         foreach (var (assName, plan) in manifest.AssemblyPlans.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
             sb.Append(firstAss ? "" : ",\n").Append("  ").Append(JsonString(assName)).Append(": {\"aot\": ").Append(plan.MethodPlans.Count).Append(", \"skipped\": {");

@@ -108,7 +108,7 @@ namespace LeanAOT.ToCpp
             {
                 if (__curMethodVar == null)
                 {
-                    __curMethodVar = _runtimeResolvedMetadatas.GetMethodVariable(_method.MethodDef, _method);
+                    __curMethodVar = _method.IsGeneric ? _runtimeResolvedMetadatas.GetSelfVariable() : _runtimeResolvedMetadatas.GetMethodVariable(_method.MethodDef, _method);
                 }
                 return __curMethodVar;
             }
@@ -285,30 +285,52 @@ namespace LeanAOT.ToCpp
         void WriteDeferredCode()
         {
             var curMethodVar = CurMethodVar;
+            if (_method.IsGeneric)
+            {
+                _beforeBodyWriter.SetIndent(0);
+                _beforeBodyWriter.AddLine($"{ConstStrings.MethodInfoPtrTypeName} {_method.SelfSlotName} = nullptr;");
+            }
             if (!_runtimeResolvedMetadatas.IsEmpty())
             {
+                var tokenVariables = _runtimeResolvedMetadatas.TokenResolvedVariables;
+                var foreignVariables = _runtimeResolvedMetadatas.ForeignVariables;
+                var derivedVariables = _runtimeResolvedMetadatas.DerivedVariables;
                 var subVariables = _runtimeResolvedMetadatas.ResolvedVariables.SelectMany(v => v.GetSubVariables()).ToList();
                 subVariables.Sort((a, b) => a.VariableName.CompareTo(b.VariableName));
                 _beforeBodyWriter.SetIndent(0);
-                _beforeBodyWriter.AddLine($"struct {_runtimeResolvedMetadatas.GetResolveMetadataStructName()}");
-                _beforeBodyWriter.BeginBlock();
-                foreach (var resolvedVar in _runtimeResolvedMetadatas.ResolvedVariables)
+                if (tokenVariables.Count > 0)
                 {
-                    _beforeBodyWriter.AddLine($"// Token: 0x{resolvedVar.token:X8}");
-                    _beforeBodyWriter.AddLine($"{resolvedVar.GetVariableTypeName()} {resolvedVar.GetVariableName()};");
+                    _beforeBodyWriter.AddLine($"struct {_runtimeResolvedMetadatas.GetResolveMetadataStructName()}");
+                    _beforeBodyWriter.BeginBlock();
+                    foreach (var resolvedVar in tokenVariables)
+                    {
+                        _beforeBodyWriter.AddLine($"// Token: 0x{resolvedVar.token:X8}");
+                        _beforeBodyWriter.AddLine($"{resolvedVar.GetVariableTypeName()} {resolvedVar.GetVariableName()};");
+                    }
+                    _beforeBodyWriter.EndBlockWithVariableDeclaration(_runtimeResolvedMetadatas.GetResolveMetadatasVariableName());
+                    _beforeBodyWriter.AddLine();
                 }
-                _beforeBodyWriter.EndBlockWithVariableDeclaration(_runtimeResolvedMetadatas.GetResolveMetadatasVariableName());
-                _beforeBodyWriter.AddLine();
                 _beforeBodyWriter.AddLine($"static bool {_runtimeResolvedMetadatas.GetResolveMetadatasInitedVariableName()};");
-                _beforeBodyWriter.AddLine($"constexpr uint32_t {_runtimeResolvedMetadatas.GetResolveMetadatasTokensVariableName()}[] = {{ {string.Join(", ", _runtimeResolvedMetadatas.ResolvedVariables.Select(v => $"0x{v.token:X8}"))} }};");
-                _beforeBodyWriter.AddLine($"static_assert(sizeof({_runtimeResolvedMetadatas.GetResolveMetadatasTokensVariableName()}) / sizeof(uint32_t) == {_runtimeResolvedMetadatas.ResolvedVariables.Count}, \"The size of the tokens array does not match the number of resolved variables\");");
-                _beforeBodyWriter.AddLine($"static_assert(sizeof({_runtimeResolvedMetadatas.GetResolveMetadatasVariableName()}) / sizeof(void*) == {_runtimeResolvedMetadatas.ResolvedVariables.Count}, \"The size of the resolved metadatas variable does not match the size of a pointer times the number of resolved variables\");");
+                if (tokenVariables.Count > 0)
+                {
+                    _beforeBodyWriter.AddLine($"constexpr uint32_t {_runtimeResolvedMetadatas.GetResolveMetadatasTokensVariableName()}[] = {{ {string.Join(", ", tokenVariables.Select(v => $"0x{v.token:X8}"))} }};");
+                    _beforeBodyWriter.AddLine($"static_assert(sizeof({_runtimeResolvedMetadatas.GetResolveMetadatasTokensVariableName()}) / sizeof(uint32_t) == {tokenVariables.Count}, \"The size of the tokens array does not match the number of resolved variables\");");
+                    _beforeBodyWriter.AddLine($"static_assert(sizeof({_runtimeResolvedMetadatas.GetResolveMetadatasVariableName()}) / sizeof(void*) == {tokenVariables.Count}, \"The size of the resolved metadatas variable does not match the size of a pointer times the number of resolved variables\");");
+                }
 
-                if (subVariables.Count > 0)
+                if (subVariables.Count > 0 || foreignVariables.Count > 0 || derivedVariables.Count > 0)
                 {
                     _beforeBodyWriter.AddLine();
                     _beforeBodyWriter.AddLine($"struct {_runtimeResolvedMetadatas.getSubResolveMetadataStructName()}");
                     _beforeBodyWriter.BeginBlock();
+                    foreach (var foreignVar in foreignVariables)
+                    {
+                        _beforeBodyWriter.AddLine($"{foreignVar.GetVariableTypeName()} {foreignVar.GetVariableName()}; // {foreignVar.foreignModule} 0x{foreignVar.token:X8}");
+                    }
+                    foreach (var derivedVar in derivedVariables)
+                    {
+                        _beforeBodyWriter.AddLine($"{derivedVar.GetVariableTypeName()} {derivedVar.GetVariableName()}; // {derivedVar.Value.ToString().Replace("*/", "* /").Replace("\n", " ")}");
+                    }
                     foreach (var subVariable in subVariables)
                     {
                         _beforeBodyWriter.AddLine($"{subVariable.TypeName} {subVariable.VariableName};");
@@ -319,11 +341,33 @@ namespace LeanAOT.ToCpp
                 _headWriter.SetIndent(1);
                 _headWriter.AddLine($"if (!{_runtimeResolvedMetadatas.GetResolveMetadatasInitedVariableName()})");
                 _headWriter.BeginBlock();
-                _headWriter.AddLine($"{VmFunctionNames.ResolveMetadataTokens}({ModuleGenerationUtil.GetModuleGlobalVariableName(_method.Module)}, {_runtimeResolvedMetadatas.GetResolveMetadatasTokensVariableName()}, {_runtimeResolvedMetadatas.ResolvedVariables.Count}, (void**)&{_runtimeResolvedMetadatas.GetResolveMetadatasVariableName()});");
+                if (tokenVariables.Count > 0)
+                {
+                    if (_method.IsGeneric)
+                    {
+                        _headWriter.AddLine($"{VmFunctionNames.ResolveGenericMethodMetadataTokens}({_method.SelfSlotName}, {_runtimeResolvedMetadatas.GetResolveMetadatasTokensVariableName()}, {tokenVariables.Count}, (void**)&{_runtimeResolvedMetadatas.GetResolveMetadatasVariableName()});");
+                    }
+                    else
+                    {
+                        _headWriter.AddLine($"{VmFunctionNames.ResolveMetadataTokens}({ModuleGenerationUtil.GetModuleGlobalVariableName(_method.Module)}, {_runtimeResolvedMetadatas.GetResolveMetadatasTokensVariableName()}, {tokenVariables.Count}, (void**)&{_runtimeResolvedMetadatas.GetResolveMetadatasVariableName()});");
+                    }
+                }
+                foreach (var foreignVar in foreignVariables)
+                {
+                    _headWriter.AddLine($"{foreignVar.GetFullReferenceVariableName()} = {foreignVar.GetForeignInitExpression()};");
+                }
+                foreach (var derivedVar in derivedVariables)
+                {
+                    _headWriter.AddLine($"{derivedVar.GetFullReferenceVariableName()} = {derivedVar.derivedInit};");
+                }
 
                 foreach (SubRuntimeResolvedVariable subVariable in subVariables)
                 {
                     _headWriter.AddLine($"{subVariable.FullReferenceVariableName} = {subVariable.InitExpression};");
+                }
+                foreach (string statement in _runtimeResolvedMetadatas.PostInitStatements)
+                {
+                    _headWriter.AddLine(statement);
                 }
                 _headWriter.AddLine($"{_runtimeResolvedMetadatas.GetResolveMetadatasInitedVariableName()} = true;");
                 _headWriter.EndBlock();
@@ -2306,14 +2350,25 @@ namespace LeanAOT.ToCpp
             }
             if (varArgTypes.Count == 0 && _manifestService.ShouldAOT(methodDetail.Method))
             {
+                string target = methodDetail.UniqueName;
+                if (methodDetail.IsGeneric)
+                {
+                    // call the instantiation under its canonical name (the planned IMethod), and make sure its self slot is
+                    // set before the call: the callee resolves its metadata with its own RtMethodInfo
+                    MethodDetail canonical = _metadataService.GetMethodDetail(_manifestService.TryGetGenericPlan(methodDetail.Method).Method);
+                    _forwardDeclaration.AddMethodForwardDeclaration(canonical.Method);
+                    _forwardDeclaration.AddGenericSelfSlotDeclaration(canonical);
+                    _runtimeResolvedMetadatas.AddPostInitStatement($"{VmFunctionNames.BindAotGenericSelf}(&{canonical.SelfSlotName}, {methodVarNameProvider()});");
+                    target = canonical.UniqueName;
+                }
                 var argsStr = CreateMethodFunctionArgsWithCast(methodDetail, args);
                 if (!methodDetail.IsVoidReturn)
                 {
-                    EmitAssignOrThrow(inst, retVar, $"{methodDetail.UniqueName}({argsStr})");
+                    EmitAssignOrThrow(inst, retVar, $"{target}({argsStr})");
                 }
                 else
                 {
-                    EmitThrowOnError(inst, $"{methodDetail.UniqueName}({argsStr})");
+                    EmitThrowOnError(inst, $"{target}({argsStr})");
                 }
             }
             else
@@ -2403,8 +2458,55 @@ namespace LeanAOT.ToCpp
             return true;
         }
 
+        /// <summary>Whether a MethodImpl of <paramref name="type"/> (its declaration inflated with the type's generic
+        /// arguments) names <paramref name="method"/>.</summary>
+        private static bool OverrideNames(MethodOverride methodOverride, TypeDetail type, MethodDetail method)
+        {
+            // a generic method is named by its MethodImpl without instantiation
+            IMethod named = method.Method is MethodSpec spec ? spec.Method : method.Method;
+            if (MethodEqualityComparer.CompareDeclaringTypes.Equals(methodOverride.MethodDeclaration, named))
+            {
+                return true;
+            }
+            if (methodOverride.MethodDeclaration.ResolveMethodDef() != method.MethodDef)
+            {
+                return false;
+            }
+            TypeSig declaringType = methodOverride.MethodDeclaration.DeclaringType.ToTypeSig();
+            if (type.GAC != null && type.GAC.ContainsGenericArguments)
+            {
+                declaringType = MetaUtil.Inflate(declaringType, type.GAC);
+            }
+            return TypeEqualityComparer.Instance.Equals(declaringType, named.DeclaringType.ToTypeSig());
+        }
+
         private IMethod FindVirtualMethodImplOnKlass(TypeDetail type, MethodDetail method)
         {
+            // an explicit implementation (MethodImpl) wins over a public method with the same name and signature, as in the
+            // runtime's vtable layout
+            if (method.Method is MethodSpec)
+            {
+                // a generic virtual method: the caller boxes and dispatches at run time
+                return null;
+            }
+            if (method.DeclaringTypeDef.IsInterface)
+            {
+                foreach (var methodDef in type.TypeDef.Methods)
+                {
+                    if (!methodDef.IsVirtual || methodDef.IsStatic)
+                    {
+                        continue;
+                    }
+                    foreach (var methodOverride in methodDef.Overrides)
+                    {
+                        if (OverrideNames(methodOverride, type, method))
+                        {
+                            GenericArgumentContext ogac = type.GAC;
+                            return ogac != null && ogac.ContainsGenericArguments ? new MemberRefUser(methodDef.Module, methodDef.Name, methodDef.MethodSig, type.Type) : methodDef;
+                        }
+                    }
+                }
+            }
             foreach (var methodDef in type.TypeDef.Methods)
             {
                 if (!methodDef.IsVirtual)
@@ -2442,6 +2544,73 @@ namespace LeanAOT.ToCpp
 
             // find in TypeDef explicit method o
             return null;
+        }
+
+        /// <summary>
+        /// <c>constrained. T call</c> of a static interface method (static abstract / virtual members, e.g. generic math's
+        /// INumberBase&lt;T&gt;.IsNegative): the method that actually runs is T's implementation, found like the runtime does
+        /// (Method::get_static_interface_method_impl_on_klass): a MethodImpl of T itself naming the interface method, else
+        /// the interface's default body. The call goes to a variable the runtime resolves the same way at metadata init;
+        /// the match here gives its signature and, when that implementation is compiled, the direct-call target.
+        /// Any other call is returned unchanged.
+        /// </summary>
+        private IMethod ResolveConstrainedStaticCall(IMethod method)
+        {
+            if (!_curPrefixs.HasFlag(PrefixFlags.Constrained))
+            {
+                return method;
+            }
+            MethodDetail methodDetail = _metadataService.GetMethodDetail(method);
+            if (!methodDetail.IsStatic || !methodDetail.DeclaringTypeDef.IsInterface)
+            {
+                return method;
+            }
+            ITypeDefOrRef constrainedType = ((ConstraintedData)_prefixData).ConstrainedType;
+            TypeDetail typeDetail = _metadataService.GetTypeDetail(constrainedType);
+            if (typeDetail.TypeDef == null)
+            {
+                throw new NotSupportedException($"constrained call on {constrainedType} in {_method.FullName}");
+            }
+            IMethod impl = null;
+            foreach (MethodDef methodDef in typeDetail.TypeDef.Methods)
+            {
+                if (!methodDef.IsStatic)
+                {
+                    continue;
+                }
+                foreach (MethodOverride methodOverride in methodDef.Overrides)
+                {
+                    if (OverrideNames(methodOverride, typeDetail, methodDetail))
+                    {
+                        GenericArgumentContext gac = typeDetail.GAC;
+                        impl = gac != null && gac.ContainsGenericArguments ? new MemberRefUser(methodDef.Module, methodDef.Name, methodDef.MethodSig, typeDetail.Type) : methodDef;
+                        break;
+                    }
+                }
+                if (impl != null)
+                {
+                    break;
+                }
+            }
+            if (impl == null)
+            {
+                if (methodDetail.MethodDef.IsAbstract || !methodDetail.MethodDef.HasBody)
+                {
+                    throw new NotSupportedException($"{constrainedType} does not implement {method} (constrained call in {_method.FullName})");
+                }
+                impl = new MemberRefUser(methodDetail.MethodDef.Module, methodDetail.MethodDef.Name, methodDetail.MethodDef.MethodSig, method.DeclaringType);
+            }
+            if (method is MethodSpec methodSpec)
+            {
+                // T's implementation of a generic static method, with the call's method arguments (the runtime does the
+                // same: apply_interface_method_inst_to_body)
+                impl = new MethodSpecUser((IMethodDefOrRef)impl, new GenericInstMethodSig(methodSpec.GenericInstMethodSig.GenericArguments));
+            }
+            RuntimeResolvedVariable typeVar = _runtimeResolvedMetadatas.GetTypeVariable(constrainedType, typeDetail);
+            RuntimeResolvedVariable interfaceMethodVar = _runtimeResolvedMetadatas.GetMethodVariable(method, methodDetail);
+            _runtimeResolvedMetadatas.GetDerivedVariable($"cstatic:{typeVar.varId}:{interfaceMethodVar.varId}", impl, _metadataService.GetMethodDetail(impl),
+                () => $"{VmFunctionNames.ResolveConstrainedStaticMethod}({typeVar.GetFullReferenceVariableName()}, {interfaceMethodVar.GetFullReferenceVariableName()})");
+            return impl;
         }
 
         private bool IsTypeImplementConstraintedMethod(ITypeDefOrRef type, MethodDetail method, out IMethod implMethod)
@@ -2487,10 +2656,23 @@ namespace LeanAOT.ToCpp
                 ITypeDefOrRef constaintedType = constrainedData.ConstrainedType;
                 if (MetaUtil.IsValueType(constaintedType.ToTypeSig()))
                 {
-                    // FIXME: we should emitcall for generic method here
-                    if (IsTypeImplementConstraintedMethod(constaintedType, methodDetail, out IMethod implMethod) && implMethod.IsMethodDef)
+                    if (IsTypeImplementConstraintedMethod(constaintedType, methodDetail, out IMethod implMethod) && implMethod != null && implMethod.IsMethodDef)
                     {
                         // for constrained callvirt on value type, we can treat it as direct call since the this pointer is already a pointer to the value type and no null check is needed
+                        EmitCall(inst, implMethod, token, true);
+                        return;
+                    }
+                    if (implMethod != null && methodDetail.Method is not MethodSpec)
+                    {
+                        // a generic value type implementing the method itself (KeyValuePair<long, Entity>, a generic struct of
+                        // the rules): call that implementation on the unboxed value like the interpreter does; boxing would
+                        // run a mutating method on a copy. The runtime resolves it (get_virtual_method_impl_on_klass); the
+                        // compile-time match only picks the signature and a direct call when the instantiation is compiled.
+                        TypeDetail consTypeDetail = _metadataService.GetTypeDetail(constaintedType);
+                        RuntimeResolvedVariable consTypeVar = _runtimeResolvedMetadatas.GetTypeVariable(constaintedType, consTypeDetail);
+                        RuntimeResolvedVariable virtualMethodVar = _runtimeResolvedMetadatas.GetMethodVariable(method, methodDetail);
+                        _runtimeResolvedMetadatas.GetDerivedVariable($"cvirt:{consTypeVar.varId}:{virtualMethodVar.varId}", implMethod, _metadataService.GetMethodDetail(implMethod),
+                            () => $"{VmFunctionNames.ResolveConstrainedVirtualMethod}({consTypeVar.GetFullReferenceVariableName()}, {virtualMethodVar.GetFullReferenceVariableName()})");
                         EmitCall(inst, implMethod, token, true);
                         return;
                     }
@@ -2597,6 +2779,11 @@ namespace LeanAOT.ToCpp
 
         private void EmitLdftn(Instruction inst, IMethod method)
         {
+            if (_curPrefixs.HasFlag(PrefixFlags.Constrained))
+            {
+                // constrained. T ldftn <static interface method>: the implementation on T (not resolved here)
+                throw new NotSupportedException($"constrained ldftn {method} in {_method.FullName}");
+            }
             _forwardDeclaration.AddMethodForwardDeclaration(method);
             MethodDetail methodDetail = _metadataService.GetMethodDetail(method);
             var methodVar = _runtimeResolvedMetadatas.GetMethodVariable(method, methodDetail);
@@ -2725,10 +2912,12 @@ namespace LeanAOT.ToCpp
         {
             if (!MetaUtil.IsValueType(targetType.ToTypeSig()))
             {
-                Pop();
-                PushStack(targetType);
-                // do nothing since it's already a reference type, just need to change the type on stack
-                // EmitCastClass(inst, targetType);
+                // already a reference (box T in generic code instantiated over a reference type): same object, new stack
+                // slot, which has to be declared like any other
+                var refObj = Pop();
+                var boxedRef = PushStack(targetType);
+                _bodyWriter.AddLine($"{GetTypeName(boxedRef)} {GetEvalVariableName(boxedRef)} = ({GetTypeName(boxedRef)}){GetEvalVariableName(refObj)};");
+                EmitSyncAotRoot(boxedRef);
                 return;
             }
             var srcObj = Pop();
@@ -3171,8 +3360,14 @@ namespace LeanAOT.ToCpp
         private void EmitSizeOf(Instruction inst, ITypeDefOrRef type)
         {
             var retVar = PushStack(EvalDataType.Int32);
-            string subObjectHeaderSize = MetaUtil.IsValueType(type.ToTypeSig()) ? "" : $"- sizeof({ConstStrings.ObjectTypeName})";
-            _bodyWriter.AddLine($"{GetTypeName(retVar)} {GetEvalVariableName(retVar)} = sizeof({TypeNameService.GetDirectlyCppTypeName(type.ToTypeSig())}){subObjectHeaderSize};");
+            if (!MetaUtil.IsValueType(type.ToTypeSig()))
+            {
+                // sizeof of a reference type is the size of a reference (ECMA-335 III.4.25; the interpreter's add_sizeof);
+                // reached by generic code instantiated over a class (Buffer.Memmove<T> from Array.Resize<T>)
+                _bodyWriter.AddLine($"{GetTypeName(retVar)} {GetEvalVariableName(retVar)} = (int32_t)sizeof(void*);");
+                return;
+            }
+            _bodyWriter.AddLine($"{GetTypeName(retVar)} {GetEvalVariableName(retVar)} = sizeof({TypeNameService.GetDirectlyCppTypeName(type.ToTypeSig())});");
         }
 
         private void EmitCkfinite(Instruction inst)
@@ -3370,6 +3565,16 @@ namespace LeanAOT.ToCpp
             }
         }
 
+        /// <summary>Instantiations: remember which definition token the inflated operand came from, so it is resolved by that
+        /// token in the instantiation's generic context.</summary>
+        private void MapGenericOperand(Instruction inst, object inflated)
+        {
+            if (_method.IsGeneric && inst.Operand is IMDTokenProvider original)
+            {
+                _runtimeResolvedMetadatas.MapOperand(inflated, original.MDToken.ToUInt32());
+            }
+        }
+
         private void SetPrefixConstrainedData(ITypeDefOrRef constrainedType, uint token)
         {
             _curPrefixs |= PrefixFlags.Constrained;
@@ -3449,6 +3654,7 @@ namespace LeanAOT.ToCpp
                         var field = _method.InflateField((IField)inst.Operand);
                         inflatedField = field;
                         inlineToken = field.MDToken.ToUInt32();
+                        MapGenericOperand(inst, field);
                         _forwardDeclaration.AddFieldForwardDeclaration(field);
                         break;
                     }
@@ -3457,6 +3663,7 @@ namespace LeanAOT.ToCpp
                         var method = _method.InflateMethod((IMethod)inst.Operand);
                         inflatedMethod = method;
                         inlineToken = method.MDToken.ToUInt32();
+                        MapGenericOperand(inst, method);
                         _forwardDeclaration.AddMethodForwardDeclaration(method);
                         break;
                     }
@@ -3471,6 +3678,7 @@ namespace LeanAOT.ToCpp
                         var type = _method.InflateType((ITypeDefOrRef)inst.Operand);
                         inflatedType = type;
                         inlineToken = type.MDToken.ToUInt32();
+                        MapGenericOperand(inst, type);
                         _forwardDeclaration.AddTypeForwardDefine(type);
                         break;
                     }
@@ -3481,6 +3689,7 @@ namespace LeanAOT.ToCpp
                             var field = _method.InflateField(fieldOp);
                             inflatedTokenOperand = field;
                             inlineToken = field.MDToken.ToUInt32();
+                            MapGenericOperand(inst, field);
                             _forwardDeclaration.AddFieldForwardDeclaration(field);
                         }
                         else if (inst.Operand is IMethod methodOp && methodOp.IsMethod)
@@ -3488,6 +3697,7 @@ namespace LeanAOT.ToCpp
                             var method = _method.InflateMethod(methodOp);
                             inflatedTokenOperand = method;
                             inlineToken = method.MDToken.ToUInt32();
+                            MapGenericOperand(inst, method);
                             _forwardDeclaration.AddMethodForwardDeclaration(method);
                         }
                         else if (inst.Operand is ITypeDefOrRef typeOp && typeOp.IsType)
@@ -3495,6 +3705,7 @@ namespace LeanAOT.ToCpp
                             var type = _method.InflateType(typeOp);
                             inflatedTokenOperand = type;
                             inlineToken = type.MDToken.ToUInt32();
+                            MapGenericOperand(inst, type);
                             _forwardDeclaration.AddTypeForwardDefine(type);
                         }
                         else
@@ -3610,7 +3821,7 @@ namespace LeanAOT.ToCpp
                     }
                     case Code.Call:
                     {
-                        EmitCall(inst, inflatedMethod, inlineToken, false);
+                        EmitCall(inst, ResolveConstrainedStaticCall(inflatedMethod), inlineToken, false);
                         break;
                     }
                     case Code.Callvirt:
@@ -4359,12 +4570,12 @@ namespace LeanAOT.ToCpp
                     }
                     case Code.Ldftn:
                     {
-                        EmitLdftn(inst, (IMethod)inst.Operand);
+                        EmitLdftn(inst, inflatedMethod);
                         break;
                     }
                     case Code.Ldvirtftn:
                     {
-                        EmitLdvirtftn(inst, (IMethod)inst.Operand);
+                        EmitLdvirtftn(inst, inflatedMethod);
                         break;
                     }
                     case Code.Localloc:
@@ -4416,7 +4627,7 @@ namespace LeanAOT.ToCpp
                     case Code.Sizeof:
                     {
                         // PushStack(newPushedDatas, EvalDataType.Int32);
-                        EmitSizeOf(inst, (ITypeDefOrRef)inst.Operand);
+                        EmitSizeOf(inst, inflatedType);
                         break;
                     }
                     case Code.Ckfinite:

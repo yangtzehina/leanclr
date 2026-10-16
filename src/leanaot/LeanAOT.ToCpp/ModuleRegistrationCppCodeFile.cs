@@ -53,6 +53,7 @@ namespace LeanAOT.ToCpp
             AddIncludes();
             AddGlobalVariableDeclaration();
             AddModuleMethodDefDatasDeclaration();
+            AddModuleGenericMethodDatasDeclaration();
             GenerateMonoPInvokeCallbackMethods();
             AddModuleMonoPInvokeCallbackDatasDeclaration();
             if (_enableTypesLayoutValidation)
@@ -169,6 +170,42 @@ namespace LeanAOT.ToCpp
             _implWriter.AddLine("};");
         }
 
+        private string GetGenericMethodDatasVariableName()
+        {
+            return $"s_generic_method_datas_{ModuleGenerationUtil.GetStandardizedModuleNameWithoutExt(_mod)}";
+        }
+
+        private List<GenericMethodPlan> _genericPlans;
+
+        /// <summary>
+        /// The instantiations generated into this module, keyed by the string the runtime computes from its own type data
+        /// when it inflates a method (AotModule::format_generic_method_key). The runtime registers them when this module's
+        /// code is attached, so they are used only when this module's MVID binding holds.
+        /// </summary>
+        private void AddModuleGenericMethodDatasDeclaration()
+        {
+            _genericPlans = GlobalServices.Inst.ManifestService.Manifest.GetGenericPlansForHome(_plan.AssemblyName);
+            if (_genericPlans.Count == 0)
+            {
+                return;
+            }
+            var invokerService = GlobalServices.Inst.InvokerService;
+            _implWriter.AddLine();
+            _implWriter.AddLine($"static const leanclr::metadata::RtAotGenericMethodData {GetGenericMethodDatasVariableName()}[] = {{");
+            _implWriter.IncreaseIndent();
+            foreach (GenericMethodPlan gp in _genericPlans)
+            {
+                _forwardDeclaration.AddMethodForwardDeclaration(gp.Method);
+                MethodInvokerInfo invoker = invokerService.GetInvoker(gp.Method);
+                _forwardDeclaration.AddInvokerForwardDeclaration(invoker);
+                MethodDetail md = GlobalServices.Inst.MetadataService.GetMethodDetail(gp.Method);
+                _forwardDeclaration.AddGenericSelfSlotDeclaration(md);
+                _implWriter.AddLine($"{{ {{ 0, ({ConstStrings.ManagedMethodPointerTypeName}){md.UniqueName}, ({ConstStrings.ManagedMethodPointerTypeName}){(md.ShouldGenerateVirtualMethod ? md.VirtualMethodUniqueName : md.UniqueName)}, ({ConstStrings.InvokeMethodPointerTypeName}){invoker.name} }}, \"{gp.Inst.RidKey}\", &{md.SelfSlotName} }}, // {gp.Origin}: {gp.Inst.Method.FullName.Replace("*/", "* /")}");
+            }
+            _implWriter.DecreaseIndent();
+            _implWriter.AddLine("};");
+        }
+
         private string GetAssemblyBindingsVariableName()
         {
             return $"s_aot_bindings_{ModuleGenerationUtil.GetStandardizedModuleNameWithoutExt(_mod)}";
@@ -241,6 +278,16 @@ namespace LeanAOT.ToCpp
             }
             _implWriter.AddLine($"{GetAssemblyBindingsVariableName()},");
             _implWriter.AddLine($"sizeof({GetAssemblyBindingsVariableName()}) / sizeof({GetAssemblyBindingsVariableName()}[0]),");
+            if (_genericPlans.Count > 0)
+            {
+                _implWriter.AddLine($"{GetGenericMethodDatasVariableName()},");
+                _implWriter.AddLine($"{_genericPlans.Count},");
+            }
+            else
+            {
+                _implWriter.AddLine("nullptr,");
+                _implWriter.AddLine("0,");
+            }
             _implWriter.DecreaseIndent();
             _implWriter.AddLine("};");
         }

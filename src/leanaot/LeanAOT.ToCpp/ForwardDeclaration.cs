@@ -533,6 +533,15 @@ namespace LeanAOT.ToCpp
             _methodDeclsWriter.AddLine();
         }
 
+        private readonly HashSet<string> _addedSelfSlots = new HashSet<string>(StringComparer.Ordinal);
+
+        public void AddGenericSelfSlotDeclaration(MethodDetail methodDetail)
+        {
+            if (!_addedSelfSlots.Add(methodDetail.SelfSlotName))
+                return;
+            _methodDeclsWriter.AddLine($"extern {ConstStrings.MethodInfoPtrTypeName} {methodDetail.SelfSlotName};");
+        }
+
         public void AddInvokerForwardDeclaration(MethodInvokerInfo invoker)
         {
             if (!_addedInvokers.Add(invoker))

@@ -492,20 +492,35 @@ namespace LeanAOT.Core
             {
                 return method;
             }
+            // A MemberRef's signature is relative to its declaring type (!n = the type's parameters, !!n = the method's),
+            // so only the declaring type and the method instantiation take the caller's arguments; MethodDetail inflates
+            // the signature with the declaring type's (now concrete) arguments.
             if (method is MemberRef mr)
             {
-                return new MemberRefUser(mr.Module, mr.Name, InflateMethodSig(mr.MethodSig, gac), Inflate(((ITypeDefOrRef)mr.Class).ToTypeSig(), gac).ToTypeDefOrRef());
+                var mrClass = (ITypeDefOrRef)mr.Class;
+                if (!mrClass.ContainsGenericParameter)
+                {
+                    return method;
+                }
+                return new MemberRefUser(mr.Module, mr.Name, mr.MethodSig, Inflate(mrClass.ToTypeSig(), gac).ToTypeDefOrRef());
             }
             if (method is MethodSpec ms)
             {
                 var genericInstMethodSig = InflateGenericInstMethodSig(ms.GenericInstMethodSig, gac);
                 if (ms.Method is MethodDef methodDef)
                 {
-                    return new MethodSpecUser(methodDef, genericInstMethodSig);
+                    return genericInstMethodSig == ms.GenericInstMethodSig ? method : new MethodSpecUser(methodDef, genericInstMethodSig);
                 }
                 if (ms.Method is MemberRef memerRef)
                 {
-                    var inflatedMemberRef = new MemberRefUser(memerRef.Module, memerRef.Name, InflateMethodSig(memerRef.MethodSig, gac), Inflate(((ITypeDefOrRef)memerRef.Class).ToTypeSig(), gac).ToTypeDefOrRef());
+                    var memberRefClass = (ITypeDefOrRef)memerRef.Class;
+                    if (genericInstMethodSig == ms.GenericInstMethodSig && !memberRefClass.ContainsGenericParameter)
+                    {
+                        return method;
+                    }
+                    var inflatedMemberRef = memberRefClass.ContainsGenericParameter
+                        ? new MemberRefUser(memerRef.Module, memerRef.Name, memerRef.MethodSig, Inflate(memberRefClass.ToTypeSig(), gac).ToTypeDefOrRef())
+                        : memerRef;
                     return new MethodSpecUser(inflatedMemberRef, genericInstMethodSig);
                 }
             }
@@ -672,8 +687,14 @@ namespace LeanAOT.Core
             }
             if (field is MemberRef memberRef)
             {
-                var newFieldSigType = Inflate(memberRef.FieldSig.Type, new GenericArgumentContext(TryInflate(GetGenericArguments(memberRef.Class), ctx), null));
-                return new MemberRefUser(memberRef.Module, memberRef.Name, new FieldSig(newFieldSigType), Inflate(((ITypeDefOrRef)memberRef.Class).ToTypeSig(), ctx).ToTypeDefOrRef());
+                // like methods: the field signature stays relative to its declaring type (so the reference still resolves
+                // to the FieldDef); TypeDetail gives the field its concrete type from the inflated declaring type.
+                var memberRefClass = (ITypeDefOrRef)memberRef.Class;
+                if (!memberRefClass.ContainsGenericParameter)
+                {
+                    return field;
+                }
+                return new MemberRefUser(memberRef.Module, memberRef.Name, memberRef.FieldSig, Inflate(memberRefClass.ToTypeSig(), ctx).ToTypeDefOrRef());
             }
             throw new Exception($"unknown field:{field}");
         }

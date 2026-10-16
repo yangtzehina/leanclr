@@ -535,8 +535,10 @@ RtResult<InvokeTypeAndMethod> Shim::get_invoker(const metadata::RtMethodInfo* me
 // Get method pointer (for native/unmanaged methods)
 MethodAndVirtualMethod Shim::get_method_pointer(const metadata::RtMethodInfo* method)
 {
+    // generic instantiations are registered by key, from whichever module covers the assemblies they involve (not
+    // necessarily the declaring one, e.g. List<ET.Entity> lives in an ET module), so they skip the image check
     const metadata::RtAotModuleData* aotModuleData = method->parent->image->get_aot_module_data();
-    if (aotModuleData != nullptr)
+    if (aotModuleData != nullptr || method->generic_method != nullptr)
     {
         const metadata::RtAotMethodDefData* aot_data = metadata::AotModule::find_aot_method_impl(method);
         if (aot_data != nullptr)

@@ -7,6 +7,9 @@
 #include "vm/rt_string.h"
 #include "vm/pinvoke.h"
 #include "vm/rt_exception.h"
+#include "vm/assembly.h"
+#include "vm/method.h"
+#include "vm/class.h"
 
 #if LEANCLR_PLATFORM_WIN
 #include <windows.h>
@@ -212,6 +215,67 @@ void resolve_generic_metadata_tokens(metadata::RtModuleDef* mod, const uint32_t*
     {
         resolved_metadatas[i] = resolve_metadata_token(mod, tokens[i], generic_method_info);
     }
+}
+
+void resolve_generic_method_metadata_tokens(const metadata::RtMethodInfo* self, const uint32_t* tokens, size_t count, void** resolved_metadatas)
+{
+    assert(self != nullptr && self->generic_method != nullptr && "generic AOT code ran before its self slot was bound");
+    metadata::RtModuleDef* mod =
+        metadata::RtModuleDef::get_module_by_id(metadata::RtMetadata::decode_module_id_from_gid(self->generic_method->base_method_gid));
+    resolve_generic_metadata_tokens(mod, tokens, count, self, resolved_metadatas);
+}
+
+void* resolve_metadata_token_in_module(const char* module_name_no_ext, uint32_t token)
+{
+    metadata::RtModuleDef* mod = metadata::RtModuleDef::find_module(module_name_no_ext);
+    if (mod == nullptr)
+    {
+        auto ret = vm::Assembly::load_by_name(module_name_no_ext);
+        if (ret.is_err() || ret.unwrap() == nullptr)
+        {
+            assert(false && "Failed to load assembly in resolve_metadata_token_in_module");
+            return nullptr;
+        }
+        mod = ret.unwrap()->mod;
+    }
+    return resolve_metadata_token(mod, token, nullptr);
+}
+
+const metadata::RtMethodInfo* resolve_constrained_static_method(metadata::RtClass* klass, const metadata::RtMethodInfo* interface_method)
+{
+    if (klass == nullptr || interface_method == nullptr || vm::Class::initialize_all(klass).is_err())
+    {
+        assert(false && "Failed to initialize the constrained class in resolve_constrained_static_method");
+        return nullptr;
+    }
+    auto ret = vm::Method::get_static_interface_method_impl_on_klass(klass, interface_method);
+    if (ret.is_err())
+    {
+        assert(false && "No implementation of a static interface method in resolve_constrained_static_method");
+        return nullptr;
+    }
+    const metadata::RtMethodInfo* impl = ret.unwrap();
+    if (vm::Class::initialize_all(const_cast<metadata::RtClass*>(impl->parent)).is_err())
+    {
+        return nullptr;
+    }
+    return impl;
+}
+
+const metadata::RtMethodInfo* resolve_constrained_virtual_method(metadata::RtClass* klass, const metadata::RtMethodInfo* virtual_method)
+{
+    if (klass == nullptr || virtual_method == nullptr || vm::Class::initialize_all(klass).is_err())
+    {
+        assert(false && "Failed to initialize the constrained class in resolve_constrained_virtual_method");
+        return nullptr;
+    }
+    auto ret = vm::Method::get_virtual_method_impl_on_klass(klass, virtual_method);
+    if (ret.is_err() || ret.unwrap()->parent != klass)
+    {
+        assert(false && "The constrained value type does not implement the method itself (resolve_constrained_virtual_method)");
+        return nullptr;
+    }
+    return ret.unwrap();
 }
 
 RtMarshalAnsiStr marshal_managed_string_to_ansi_string(vm::RtString* str, AnsiStringBuilder& temp) noexcept

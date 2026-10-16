@@ -10,11 +10,17 @@ namespace LeanAOT.ToCpp
         public void Generate(GenerationConfig conf)
         {
             _config = conf;
+            Prepare();
             foreach (var assPlan in conf.manifest.AssemblyPlans.Values)
             {
                 GenerateAssembly(assPlan);
             }
             GenerateGlobalInitializationCpp();
+        }
+
+        /// <summary>Runs once before any assembly is generated.</summary>
+        protected virtual void Prepare()
+        {
         }
 
         public abstract void GenerateAssembly(AssemblyPlan plan);

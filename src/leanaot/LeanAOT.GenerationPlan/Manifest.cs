@@ -29,6 +29,9 @@ namespace LeanAOT.GenerationPlan
 
         /// <summary>icall / P/Invoke methods to leave to the runtime's own invokers (no direct runtime API entry).</summary>
         public Func<MethodDef, bool> ShouldSkipRuntimeResolvedNativeMethod;
+
+        /// <summary>When non-null, closed generic instantiations are compiled too (<see cref="GenericPlanner"/>).</summary>
+        public GenericPlannerArgs Generics;
     }
 
     public class Manifest
@@ -40,9 +43,20 @@ namespace LeanAOT.GenerationPlan
 
         public IReadOnlyDictionary<string, AssemblyPlan> AssemblyPlans => _assemblyPlans;
 
-        private readonly List<GenericMethodPlan> _genericMethodPlans = new List<GenericMethodPlan>();
+        private readonly Dictionary<string, HashSet<string>> _closures = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 
-        public IReadOnlyList<GenericMethodPlan> GenericMethodPlans => _genericMethodPlans;
+        /// <summary>Per AOT module: the module and every assembly in its reference closure (what its MVID binding covers).</summary>
+        public IReadOnlyDictionary<string, HashSet<string>> Closures => _closures;
+
+        public GenericPlanner Generics { get; }
+
+        public IEnumerable<GenericMethodPlan> GenericMethodPlans => Generics?.Plans.Values ?? Enumerable.Empty<GenericMethodPlan>();
+
+        /// <summary>The instantiations whose code goes into <paramref name="home"/>'s files, in a stable order.</summary>
+        public List<GenericMethodPlan> GetGenericPlansForHome(string home)
+        {
+            return GenericMethodPlans.Where(p => p.Home == home).OrderBy(p => p.Inst.RidKey, StringComparer.Ordinal).ToList();
+        }
 
         /// <summary>
         /// Per assembly: why methods with IL bodies were left to the interpreter (reason -> method full names).
@@ -50,6 +64,9 @@ namespace LeanAOT.GenerationPlan
         /// "icall / P/Invoke resolved at run time" (no IL body; listed so reports can count them).
         /// </summary>
         public Dictionary<string, SortedDictionary<string, List<string>>> SkippedMethods { get; } = new Dictionary<string, SortedDictionary<string, List<string>>>();
+
+        // non-generic methods that stay interpreted only because of exception handlers (scanned for generic callees)
+        private readonly List<MethodDef> _interpretedRoots = new List<MethodDef>();
 
         private void NoteSkipped(string assName, string reason, MethodDef method, bool native = false)
         {
@@ -116,6 +133,12 @@ namespace LeanAOT.GenerationPlan
                         if (method.HasBody && method.Body.HasExceptionHandlers)
                         {
                             NoteSkipped(assName, "exception handlers", method);
+                            // still runs (interpreted) and calls generic code: its callees belong to the static closure
+                            if (args.AotRulesEvaluator == null || args.AotRulesEvaluator.ShouldIncludeByRules(assName, method) ||
+                                (args.PgoIncludeIndex != null && args.PgoIncludeIndex.Contains(assName, method)))
+                            {
+                                _interpretedRoots.Add(method);
+                            }
                             continue;
                         }
                         // don't aot System.String's constructor, because we will handle it in a special way
@@ -184,6 +207,33 @@ namespace LeanAOT.GenerationPlan
 
                 _assemblyPlans[assName] = assPlan;
             }
+
+            foreach (var assName in _assemblyPlans.Keys)
+            {
+                _closures[assName] = ComputeClosure(args.assemblyCache, assName);
+            }
+            if (args.Generics != null)
+            {
+                Generics = new GenericPlanner(args.assemblyCache, args.Generics, _closures);
+                Generics.Run(_assemblyPlans.Values.SelectMany(p => p.MethodPlans).Select(p => p.MethodDef).Concat(_interpretedRoots));
+            }
+        }
+
+        private static HashSet<string> ComputeClosure(AssemblyCache cache, string assName)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var stack = new Stack<string>();
+            stack.Push(assName);
+            while (stack.Count > 0)
+            {
+                string name = stack.Pop();
+                if (!seen.Add(name))
+                    continue;
+                ModuleDefMD mod = cache.LoadModule(name);
+                foreach (AssemblyRef ar in mod.GetAssemblyRefs())
+                    stack.Push(ar.Name);
+            }
+            return seen;
         }
 
         private static void TryAddMethodPlan(List<MethodDefPlan> methodPlans, HashSet<IMethod> methodsInAotPlan, MethodDef method)
@@ -202,13 +252,42 @@ namespace LeanAOT.GenerationPlan
 
         public bool ShouldAOT(IMethod method)
         {
+            return ShouldAOT(method, null);
+        }
+
+        /// <summary>Is <paramref name="method"/> compiled, and may code generated into <paramref name="callerHome"/> call
+        /// it directly? An instantiation only when its home's binding closure is part of the caller's: then whenever
+        /// the caller's MVID binding holds, so does the callee's, and a direct call never reaches code generated for
+        /// other images. Otherwise the call goes through the runtime, which only uses the instantiation's code when its
+        /// own home module is attached.</summary>
+        public bool ShouldAOT(IMethod method, string callerHome)
+        {
             MethodDef methodDef = method.ResolveMethodDef();
-            if (methodDef != null)
+            if (methodDef == null)
             {
-                return AssemblyPlans.TryGetValue(methodDef.Module.Assembly.Name, out var assPlan) &&
-                    assPlan.ContaisAOTMethod(method);
+                return false;
             }
-            return false;
+            if (GenericInstantiation.IsGenericDefinition(methodDef))
+            {
+                GenericMethodPlan plan = TryGetGenericPlan(method);
+                if (plan == null || callerHome == null)
+                {
+                    return false;
+                }
+                return plan.Home == callerHome || (_closures.TryGetValue(callerHome, out var callerClosure) && _closures[plan.Home].IsSubsetOf(callerClosure));
+            }
+            return AssemblyPlans.TryGetValue(methodDef.Module.Assembly.Name, out var assPlan) &&
+                assPlan.ContaisAOTMethod(method);
+        }
+
+        public GenericMethodPlan TryGetGenericPlan(IMethod method)
+        {
+            if (Generics == null)
+            {
+                return null;
+            }
+            GenericInstantiation gi = GenericInstantiation.TryFrom(method);
+            return gi != null && Generics.Plans.TryGetValue(gi.RidKey, out var plan) ? plan : null;
         }
     }
 

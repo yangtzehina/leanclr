@@ -7,6 +7,9 @@
 #include <vector>
 
 #include "metadata/metadata_name.h"
+#include "metadata/aot_module.h"
+#include "interp/machine_state.h"
+#include <map>
 #include "metadata/module_def.h"
 #include "interp/interp_defs.h"
 #include "utils/string_builder.h"
@@ -27,7 +30,11 @@ struct ExportCandidate
     uint64_t cost;
     bool aot;
     const char* why; // interpreted methods: why no AOT code ran ("" for AOT)
+    std::string key; // closed generic instantiations: AotModule::format_generic_method_key ("" otherwise)
+    std::string callers; // JSON array of the top callers by calls (profiled frames), "" when unknown
 };
+
+
 
 // AOT coverage: did the method run as AOT code, and if not, the first reason that applies.
 bool is_aot_method(const metadata::RtMethodInfo* method)
@@ -60,6 +67,9 @@ const char* interpreted_reason(const metadata::RtMethodInfo* method)
 bool g_enabled = true;
 std::vector<ProfileSlot> g_slots;
 std::vector<const metadata::RtMethodInfo*> g_slot_methods;
+// (caller, callee) -> calls while enabled; the caller is the frame below the callee's on the machine state's frame stack
+// (interpreted and AOT frames alike; nullptr = called from native code)
+std::map<std::pair<const metadata::RtMethodInfo*, const metadata::RtMethodInfo*>, uint64_t> g_edges;
 
 inline size_t to_slot_index(uint32_t profile_slot)
 {
@@ -129,6 +139,47 @@ void append_json_escaped(std::string& out, const std::string& text)
     append_json_escaped(out, text.c_str());
 }
 
+std::string build_callers_json(const metadata::RtMethodInfo* callee)
+{
+    std::vector<std::pair<uint64_t, const metadata::RtMethodInfo*>> list;
+    for (auto it = g_edges.begin(); it != g_edges.end(); ++it)
+    {
+        if (it->first.second == callee)
+            list.push_back({it->second, it->first.first});
+    }
+    if (list.empty())
+        return std::string();
+    std::sort(list.begin(), list.end(),
+              [](const std::pair<uint64_t, const metadata::RtMethodInfo*>& a, const std::pair<uint64_t, const metadata::RtMethodInfo*>& b)
+              { return a.first > b.first; });
+    if (list.size() > 8)
+        list.resize(8);
+    std::string json = "[";
+    for (size_t i = 0; i < list.size(); ++i)
+    {
+        if (i > 0)
+            json.push_back(',');
+        json.append("{\"calls\":");
+        json.append(std::to_string(list[i].first));
+        json.append(",\"signature\":\"");
+        std::string sig = "(native)";
+        if (list[i].second != nullptr)
+        {
+            auto r = build_method_signature(list[i].second);
+            sig = r.is_ok() ? r.unwrap() : std::string("?");
+        }
+        for (char c : sig)
+        {
+            if (c == '"' || c == '\\')
+                json.push_back('\\');
+            json.push_back(c);
+        }
+        json.append("\"}");
+    }
+    json.push_back(']');
+    return json;
+}
+
 template <typename CallsGetter, typename CostGetter>
 std::vector<ExportCandidate> collect_candidates(const ExportOptions& options, CallsGetter calls_getter, CostGetter cost_getter)
 {
@@ -149,6 +200,7 @@ std::vector<ExportCandidate> collect_candidates(const ExportOptions& options, Ca
         {
             continue;
         }
+        char key[512];
         candidates.push_back(ExportCandidate{
             get_assembly_name(method),
             signature_result.unwrap(),
@@ -156,6 +208,8 @@ std::vector<ExportCandidate> collect_candidates(const ExportOptions& options, Ca
             cost,
             is_aot_method(method),
             interpreted_reason(method),
+            metadata::AotModule::format_generic_method_key(method, key, sizeof(key)) ? std::string(key) : std::string(),
+            build_callers_json(method),
         });
     }
 
@@ -216,6 +270,17 @@ std::string build_candidates_json(const std::vector<ExportCandidate>& candidates
             json.append(",\"why\":\"");
             json.append(candidate.why);
             json.push_back('"');
+        }
+        if (!candidate.key.empty())
+        {
+            json.append(",\"key\":\"");
+            append_json_escaped(json, candidate.key);
+            json.push_back('"');
+        }
+        if (!candidate.callers.empty())
+        {
+            json.append(",\"callers\":");
+            json.append(candidate.callers);
         }
         json.push_back('}');
     }
@@ -289,6 +354,18 @@ void Profile::inc_call_count(const metadata::RtMethodInfo* method, uint64_t delt
     metadata::RtMethodInfo* mutable_method = const_cast<metadata::RtMethodInfo*>(method);
     uint32_t slot_idx = ensure_slot(mutable_method);
     g_slots[slot_idx].period_calls += delta;
+    // the callee's own frame is on top; an interpreted caller of AOT code also pushes a frame for the callee before
+    // the AOT function pushes its own, so skip one frame of the same method
+    auto frames = interp::MachineState::get_global_machine_state().get_active_frames();
+    const metadata::RtMethodInfo* caller = nullptr;
+    if (frames.size() >= 2)
+    {
+        size_t i = frames.size() - 2;
+        if (frames[i].method == method && i > 0)
+            i--;
+        caller = frames[i].method;
+    }
+    g_edges[{caller, method}] += delta;
 #else
     (void)method;
     (void)delta;
@@ -364,6 +441,7 @@ void Profile::reset_global() noexcept
 #if LEANCLR_PGO_PROFILE
     for (uint64_t& n : g_transitions)
         n = 0;
+    g_edges.clear();
     for (ProfileSlot& slot : g_slots)
     {
         slot.period_calls = 0;

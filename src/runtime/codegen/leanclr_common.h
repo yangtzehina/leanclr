@@ -486,6 +486,27 @@ void resolve_metadata_tokens(metadata::RtModuleDef* mod, const uint32_t* tokens,
 void resolve_generic_metadata_tokens(metadata::RtModuleDef* mod, const uint32_t* tokens, size_t count, const metadata::RtMethodInfo* generic_method_info,
                                      void** resolved_metadatas);
 vm::RtString* resolve_string_literal(metadata::RtModuleDef* mod, uint32_t token);
+// Metadata of a compiled generic instantiation (LeanAOT GenericPlanner): tokens of the generic definition's module, resolved in
+// the instantiation's generic context (`self` is the inflated method the code was bound to, see RtAotGenericMethodData).
+void resolve_generic_method_metadata_tokens(const metadata::RtMethodInfo* self, const uint32_t* tokens, size_t count, void** resolved_metadatas);
+// A token of another assembly (by name, loaded if it is not yet): definitions a generic body reaches that are not tokens of
+// the module the code lives in.
+void* resolve_metadata_token_in_module(const char* module_name_no_ext, uint32_t token);
+// constrained. T call <static interface method>: the implementation on T, as the interpreter's transformer resolves it
+// (Method::get_static_interface_method_impl_on_klass); nullptr if T has none.
+const metadata::RtMethodInfo* resolve_constrained_static_method(metadata::RtClass* klass, const metadata::RtMethodInfo* interface_method);
+// constrained. T callvirt <virtual method> with a value type T that implements it itself: that implementation, called with the
+// unboxed `this` (Method::get_virtual_method_impl_on_klass, as the transformer does); nullptr if there is none.
+const metadata::RtMethodInfo* resolve_constrained_virtual_method(metadata::RtClass* klass, const metadata::RtMethodInfo* virtual_method);
+// Compiled callers bind the callee instantiation's self slot before calling it directly; the runtime does the same when it
+// hands the code out through AotModule::find_aot_method_impl. Every binding is the same instantiation.
+inline void bind_aot_generic_self(const metadata::RtMethodInfo** slot, const metadata::RtMethodInfo* method) noexcept
+{
+    if (*slot == nullptr)
+    {
+        *slot = method;
+    }
+}
 
 template <typename ArgType>
 void expand_argument_to_eval_stack(const ArgType arg, interp::RtStackObject* ret) noexcept
@@ -669,6 +690,7 @@ inline RtResult<const metadata::RtMethodInfo*> get_virtual_method_impl(vm::RtObj
 {
     return vm::Method::get_virtual_method_impl(obj, virtual_method);
 }
+
 
 inline vm::RtObject* is_inst(vm::RtObject* obj, const metadata::RtClass* klass) noexcept
 {
