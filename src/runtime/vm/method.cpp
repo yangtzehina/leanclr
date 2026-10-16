@@ -117,7 +117,9 @@ RtResult<const RtVirtualInvokeData*> Method::get_interface_method_invoke_data(co
             {
                 continue;
             }
-            if (!Class::is_assignable_from_generic_parameter_convariant(implemented_interface, interface_klass, klass))
+            // the interface itself always matches (identical arguments); skip the variance cache lookup for it
+            if (implemented_interface != interface_klass &&
+                !Class::is_assignable_from_generic_parameter_convariant(implemented_interface, interface_klass, klass))
             {
                 continue;
             }

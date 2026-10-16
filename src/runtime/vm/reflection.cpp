@@ -1180,7 +1180,9 @@ RtResult<const metadata::RtTypeSig*> Reflection::get_type_sig_from_reflection_ty
     auto raw_obj = reinterpret_cast<RtObject*>(const_cast<RtReflectionType*>(type_obj));
     DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(RtObject*, normalized_obj, normalize_coreclr_reflection_object(raw_obj));
     auto normalized_type = reinterpret_cast<const RtReflectionType*>(normalized_obj);
-    if (std::getenv("LEANCLR_REFLECTION_TRACE") != nullptr)
+    // on the typeof / Type.Equals path: read the switch once
+    static const bool s_reflection_trace = std::getenv("LEANCLR_REFLECTION_TRACE") != nullptr;
+    if (s_reflection_trace)
     {
         auto klass_ret = Class::get_class_from_typesig(reinterpret_cast<const metadata::RtTypeSig*>(normalized_type->type_handle));
         const char* ns = "<class-error>";

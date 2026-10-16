@@ -48,6 +48,11 @@ namespace LeanAOT.ToCpp
                 return false;
             }
 
+            if (TryEmitInlineRuntimeIntrinsic(inst, methodDetail, methodVarNameProvider, args, retVar))
+            {
+                return true;
+            }
+
             UTF8String methodName = methodDef.Name;
             TypeDef declaringType = methodDef.DeclaringType;
             switch (declaringType.Name.ToString())
@@ -101,6 +106,266 @@ namespace LeanAOT.ToCpp
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Runtime-implemented CoreLib helpers (Unsafe, RuntimeHelpers type predicates, MemoryMarshal.GetArrayDataReference)
+        /// written out in place. Without this a compiled caller reaches them through a direct-call bridge and the runtime's
+        /// intrinsic invoker (arguments copied to an eval-stack buffer and back), which costs more than the operation; the
+        /// expressions here do what src/runtime/intrinsics/system_runtime_compilerservices_unsafe.cpp and
+        /// system_runtime_interopservices_memorymarshal.cpp do. Anything not matched exactly keeps the old path.
+        /// </summary>
+        private bool TryEmitInlineRuntimeIntrinsic(Instruction inst, MethodDetail methodDetail, Func<string> methodVarNameProvider, List<EvalVariable> args, EvalVariable retVar)
+        {
+            MethodDef def = methodDetail.MethodDef;
+            string typeName = def.DeclaringType.FullName;
+            string name = def.Name;
+            IList<TypeSig> ps = def.MethodSig.Params;
+            IList<TypeSig> gargs = methodDetail.Method is MethodSpec spec ? spec.GenericInstMethodSig.GenericArguments : null;
+            string A(int i) => GetEvalVariableName(args[i]);
+            if (!def.IsStatic)
+            {
+                if (typeName == "System.Type" && name == "get_IsValueType" && ps.Count == 0 && retVar != null)
+                {
+                    // typeof(TKey).IsValueType (Dictionary.FindValue): fixed for a RuntimeType; `this` was null-checked by the call
+                    string site = $"{GetEvalVariableName(retVar)}_site";
+                    _bodyWriter.AddLine($"static leanclr::codegen::AotTypeIsValueTypeSite {site};");
+                    EmitAssignOrThrow(inst, retVar, $"leanclr::codegen::type_is_value_type_cached((leanclr::vm::RtObject*)({A(0)}), {site})");
+                    return true;
+                }
+                return false;
+            }
+
+            void Assign(string expr)
+            {
+                _bodyWriter.AddLine($"{GetEvalVariableName(retVar)} = ({GetTypeName(retVar)})({expr});");
+                EmitSyncAotRoot(retVar);
+            }
+
+            if (typeName == "System.Runtime.CompilerServices.Unsafe")
+            {
+                switch (name)
+                {
+                case "SizeOf":
+                    if (gargs?.Count == 1 && ps.Count == 0 && retVar != null && TryGetElementSizeExpr(gargs[0], out string sizeOfT))
+                    {
+                        Assign($"(int32_t){sizeOfT}");
+                        return true;
+                    }
+                    return false;
+                case "As":
+                case "AsRef":
+                case "AsPointer":
+                    // the same reference or address under another type (Unsafe::as / as_pointer return their argument)
+                    if (ps.Count == 1 && retVar != null)
+                    {
+                        Assign(A(0));
+                        return true;
+                    }
+                    return false;
+                case "Add":
+                case "Subtract":
+                    if (gargs?.Count == 1 && ps.Count == 2 && retVar != null && TryGetElementSizeExpr(gargs[0], out string elementSize))
+                    {
+                        string offset = GetIntegerOffsetExpr(ps[1], A(1));
+                        if (offset == null)
+                        {
+                            return false;
+                        }
+                        Assign($"(uint8_t*)({A(0)}) {(name == "Add" ? "+" : "-")} {offset} * (intptr_t){elementSize}");
+                        return true;
+                    }
+                    return false;
+                case "AddByteOffset":
+                case "SubtractByteOffset":
+                    if (ps.Count == 2 && retVar != null)
+                    {
+                        string offset = GetIntegerOffsetExpr(ps[1], A(1));
+                        if (offset == null)
+                        {
+                            return false;
+                        }
+                        Assign($"(uint8_t*)({A(0)}) {(name == "AddByteOffset" ? "+" : "-")} {offset}");
+                        return true;
+                    }
+                    return false;
+                case "AreSame":
+                    if (ps.Count == 2 && retVar != null)
+                    {
+                        Assign($"(void*)({A(0)}) == (void*)({A(1)})");
+                        return true;
+                    }
+                    return false;
+                case "IsAddressLessThan":
+                case "IsAddressGreaterThan":
+                    if (ps.Count == 2 && retVar != null)
+                    {
+                        Assign($"(uintptr_t)({A(0)}) {(name == "IsAddressLessThan" ? "<" : ">")} (uintptr_t)({A(1)})");
+                        return true;
+                    }
+                    return false;
+                case "ByteOffset":
+                    if (ps.Count == 2 && retVar != null)
+                    {
+                        Assign($"(intptr_t)((uintptr_t)({A(1)}) - (uintptr_t)({A(0)}))");
+                        return true;
+                    }
+                    return false;
+                case "CopyBlock":
+                case "CopyBlockUnaligned":
+                    if (ps.Count == 3 && retVar == null)
+                    {
+                        _bodyWriter.AddLine($"std::memmove((void*)({A(0)}), (const void*)({A(1)}), (uint32_t)({A(2)}));");
+                        return true;
+                    }
+                    return false;
+                case "InitBlock":
+                case "InitBlockUnaligned":
+                    if (ps.Count == 3 && retVar == null)
+                    {
+                        _bodyWriter.AddLine($"std::memset((void*)({A(0)}), (uint8_t)({A(1)}), (uint32_t)({A(2)}));");
+                        return true;
+                    }
+                    return false;
+                case "SkipInit":
+                    // a JIT hint; locals are already zeroed (Unsafe::skip_init does nothing either)
+                    if (ps.Count == 1 && retVar == null)
+                    {
+                        return true;
+                    }
+                    return false;
+                case "ReadUnaligned":
+                    if (gargs?.Count == 1 && ps.Count == 1 && retVar != null && TryGetUnalignedPrimitive(gargs[0], out string readType))
+                    {
+                        string tmp = $"{GetEvalVariableName(retVar)}_raw";
+                        _bodyWriter.AddLine($"{readType} {tmp};");
+                        _bodyWriter.AddLine($"std::memcpy(&{tmp}, (const void*)({A(0)}), sizeof({readType}));");
+                        Assign(tmp);
+                        return true;
+                    }
+                    return false;
+                case "WriteUnaligned":
+                    if (gargs?.Count == 1 && ps.Count == 2 && retVar == null && TryGetUnalignedPrimitive(gargs[0], out string writeType))
+                    {
+                        string tmp = $"{A(1)}_raw";
+                        _bodyWriter.AddLine($"{writeType} {tmp} = ({writeType})({A(1)});");
+                        _bodyWriter.AddLine($"std::memcpy((void*)({A(0)}), &{tmp}, sizeof({writeType}));");
+                        return true;
+                    }
+                    return false;
+                default:
+                    return false;
+                }
+            }
+            if (typeName == "System.SpanHelpers" && ps.Count == 3 && retVar == null && name == "Memmove")
+            {
+                // [Intrinsic] Memmove(ref byte dest, ref byte src, nuint len), which LeanAOT does not compile from IL (it would
+                // run interpreted): the same bytes moved, overlap allowed
+                _bodyWriter.AddLine($"std::memmove((void*)({A(0)}), (const void*)({A(1)}), (size_t)({A(2)}));");
+                return true;
+            }
+            if (typeName == "System.SpanHelpers" && ps.Count == 2 && retVar == null && name == "ClearWithoutReferences")
+            {
+                _bodyWriter.AddLine($"std::memset((void*)({A(0)}), 0, (size_t)({A(1)}));");
+                return true;
+            }
+            if (typeName == "System.ArgumentNullException" && name == "ThrowIfNull" && ps.Count == 2 && retVar == null
+                && ps[0].ElementType == ElementType.Object && ps[1].ElementType == ElementType.String)
+            {
+                // [Intrinsic] ThrowIfNull(object, string) (every lock statement's Monitor.Enter): nothing to do for a non-null
+                // argument; a null one still goes to the real method, which builds the exception
+                _bodyWriter.AddLine($"if ({GetUnlikelyExpr($"{A(0)} == nullptr")})");
+                _bodyWriter.AddLine("{");
+                _bodyWriter.IncreaseIndent();
+                EmitCallByMethodPointerDirectly(inst, methodDetail, methodVarNameProvider(), args, null, false);
+                _bodyWriter.DecreaseIndent();
+                _bodyWriter.AddLine("}");
+                return true;
+            }
+            if (typeName == "System.Type" && name == "GetTypeFromHandle" && ps.Count == 1 && retVar != null && args[0].type != EvalDataType.ValueType)
+            {
+                // typeof(T): the handle is a metadata pointer (ldtoken), the RuntimeType for it is fixed
+                string site = $"{GetEvalVariableName(retVar)}_site";
+                _bodyWriter.AddLine($"static leanclr::codegen::AotTypeFromHandleSite {site};");
+                EmitAssignOrThrow(inst, retVar, $"leanclr::codegen::get_type_from_handle_cached((const void*)({A(0)}), {site})");
+                return true;
+            }
+            if (typeName == "System.Runtime.CompilerServices.RuntimeHelpers")
+            {
+                string predicate = name == "IsReferenceOrContainsReferences" ? "leanclr::codegen::is_reference_or_contains_references_of"
+                    : name == "IsBitwiseEquatable" ? "leanclr::codegen::is_bitwise_equatable_of" : null;
+                if (predicate == null || gargs?.Count != 1 || ps.Count != 0 || retVar == null)
+                {
+                    return false;
+                }
+                string site = $"{GetEvalVariableName(retVar)}_site";
+                _bodyWriter.AddLine($"static int8_t {site};");
+                EmitAssignOrThrow(inst, retVar, $"leanclr::codegen::cached_type_predicate({site}, {predicate}, {methodVarNameProvider()})");
+                return true;
+            }
+            if (typeName == "System.Runtime.InteropServices.MemoryMarshal" && name == "GetArrayDataReference" && gargs?.Count == 1 && ps.Count == 1 && retVar != null)
+            {
+                // get_array_data_reference: NullReference for null, else the first element's address
+                EmitCheckNotNull(inst, args[0], force: true);
+                Assign($"leanclr::codegen::get_array_element_data_start_as<uint8_t>((leanclr::vm::RtArray*)({A(0)}))");
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>sizeof(T) as the runtime counts it (get_first_generic_arg_size): a reference for a reference type, the
+        /// value's own size for a value type (the same expression IL sizeof compiles to).</summary>
+        private bool TryGetElementSizeExpr(TypeSig type, out string expr)
+        {
+            TypeSig t = type.RemovePinnedAndModifiers();
+            if (t.ElementType == ElementType.Var || t.ElementType == ElementType.MVar || t.ElementType == ElementType.ByRef
+                || t.ElementType == ElementType.TypedByRef || t.ElementType == ElementType.Void)
+            {
+                expr = null;
+                return false;
+            }
+            expr = MetaUtil.IsValueType(t) ? $"sizeof({TypeNameService.GetDirectlyCppTypeName(t)})" : "sizeof(void*)";
+            return true;
+        }
+
+        /// <summary>An element or byte offset argument widened like Unsafe's get_integer_offset_param.</summary>
+        private static string GetIntegerOffsetExpr(TypeSig paramType, string value)
+        {
+            switch (paramType.RemovePinnedAndModifiers().ElementType)
+            {
+            case ElementType.I4:
+                return $"(intptr_t)(int32_t)({value})";
+            case ElementType.U4:
+                return $"(intptr_t)(uint32_t)({value})";
+            case ElementType.I:
+                return $"(intptr_t)({value})";
+            case ElementType.U:
+                return $"(intptr_t)(uintptr_t)({value})";
+            default:
+                return null;
+            }
+        }
+
+        /// <summary>ReadUnaligned / WriteUnaligned of a primitive: the bytes of that exact type (the runtime reads by reduce
+        /// type and widens to the stack type; it writes the low bytes of the stack value, which is the same truncation).</summary>
+        private static bool TryGetUnalignedPrimitive(TypeSig type, out string cppType)
+        {
+            switch (type.RemovePinnedAndModifiers().ElementType)
+            {
+            case ElementType.Boolean:
+            case ElementType.U1: cppType = "uint8_t"; return true;
+            case ElementType.I1: cppType = "int8_t"; return true;
+            case ElementType.Char:
+            case ElementType.U2: cppType = "uint16_t"; return true;
+            case ElementType.I2: cppType = "int16_t"; return true;
+            case ElementType.I4: cppType = "int32_t"; return true;
+            case ElementType.U4: cppType = "uint32_t"; return true;
+            case ElementType.I8: cppType = "int64_t"; return true;
+            case ElementType.U8: cppType = "uint64_t"; return true;
+            case ElementType.I: cppType = "intptr_t"; return true;
+            case ElementType.U: cppType = "uintptr_t"; return true;
+            default: cppType = null; return false;
+            }
         }
 
         private bool TryEmitRuntimeHelpersCreateSpan(Instruction inst, MethodDef methodDef, List<EvalVariable> args, EvalVariable retVar)

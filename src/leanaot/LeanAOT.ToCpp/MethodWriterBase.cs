@@ -2728,7 +2728,10 @@ namespace LeanAOT.ToCpp
             }
 
             var finalMethodVar = CreateTempVariable(ConstStrings.MethodInfoPtrTypeName);
-            _bodyWriter.AddLine($"{VmFunctionNames.GOTO_DECLARING_ASSIGN_OR_THROW}({finalMethodVar.TypeName}, {finalMethodVar.Name}, {VmFunctionNames.GetVirtualMethodOnObj}({GetEvalVariableName(thisVar)}, {methodVar.GetFullReferenceVariableName()}), {CurMethodVar.GetFullReferenceVariableName()}, {GetCurrentIpOffset(inst)});");
+            // per-site cache of (class, implementation): a zero-initialized static, so no guard and nothing for a goto to skip
+            string callSiteName = $"{finalMethodVar.Name}_site";
+            _bodyWriter.AddLine($"static {VmFunctionNames.AotVirtualCallSite} {callSiteName};");
+            _bodyWriter.AddLine($"{VmFunctionNames.GOTO_DECLARING_ASSIGN_OR_THROW}({finalMethodVar.TypeName}, {finalMethodVar.Name}, {VmFunctionNames.GetVirtualMethodOnObjCached}({GetEvalVariableName(thisVar)}, {methodVar.GetFullReferenceVariableName()}, {callSiteName}), {CurMethodVar.GetFullReferenceVariableName()}, {GetCurrentIpOffset(inst)});");
             EmitAssumeNotNull(finalMethodVar.Name);
             EmitCallByMethodPointerDirectly(inst, methodDetail, finalMethodVar.Name, args, retVar, true);
             EmitClearAotRoots(args);
@@ -2920,6 +2923,15 @@ namespace LeanAOT.ToCpp
                 EmitSyncAotRoot(boxedRef);
                 return;
             }
+            if (!MayBoxToNullReference(targetType.ToTypeSig()) && IsNullTestedNext(inst))
+            {
+                // `x != null` on a generic T instantiated over a non-nullable value type (GenericComparer<long>.Compare,
+                // ThrowIfNull<long>): the box is never null and only the branch reads it, so the branch gets a constant
+                // instead of an allocation (RyuJIT drops the same box; nothing can observe the object)
+                Pop();
+                EmitLoadInt32(inst, 1);
+                return;
+            }
             var srcObj = Pop();
             var dstObj = PushStack(_corlibTypes.Object);
             TypeDetail typeDetail = _metadataService.GetTypeDetail(targetType);
@@ -2928,6 +2940,27 @@ namespace LeanAOT.ToCpp
             if (!MayBoxToNullReference(targetType.ToTypeSig()))
             {
                 EmitAssumeNotNull(dstObj);
+            }
+        }
+
+        /// <summary>The instruction after <paramref name="inst"/> in the same basic block is brtrue / brfalse (a null test).</summary>
+        private bool IsNullTestedNext(Instruction inst)
+        {
+            List<Instruction> insts = _curBb.instructions;
+            int index = insts.IndexOf(inst);
+            if (index < 0 || index + 1 >= insts.Count)
+            {
+                return false;
+            }
+            switch (insts[index + 1].OpCode.Code)
+            {
+            case Code.Brtrue:
+            case Code.Brtrue_S:
+            case Code.Brfalse:
+            case Code.Brfalse_S:
+                return true;
+            default:
+                return false;
             }
         }
 

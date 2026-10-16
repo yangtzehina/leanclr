@@ -33,6 +33,8 @@ namespace LeanAOT.ToCpp
         public const string RunClassStaticConstructor = "leanclr::codegen::run_class_static_constructor";
         public const string NewObj = "LEANCLR_CODEGEN_NEWOBJ";
         public const string GetVirtualMethodOnObj = "leanclr::codegen::get_virtual_method_impl";
+        public const string GetVirtualMethodOnObjCached = "leanclr::codegen::get_virtual_method_impl_cached";
+        public const string AotVirtualCallSite = "leanclr::codegen::AotVirtualCallSite";
         public const string IsInst = "leanclr::codegen::is_inst";
         public const string CastClass = "leanclr::codegen::cast_class";
         public const string IsAssignableFrom = "leanclr::codegen::is_assignable_from";

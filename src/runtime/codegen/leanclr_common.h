@@ -691,6 +691,88 @@ inline RtResult<const metadata::RtMethodInfo*> get_virtual_method_impl(vm::RtObj
     return vm::Method::get_virtual_method_impl(obj, virtual_method);
 }
 
+// One callvirt site of generated code (a zero-initialized static next to the call): the class seen last and the
+// implementation the runtime resolved for it. get_virtual_method_impl_on_klass is a pure function of (class, method)
+// (generic instantiations come from the pool), so a hit is the same answer without the interface walk.
+struct AotVirtualCallSite
+{
+    const metadata::RtClass* klass;
+    const metadata::RtMethodInfo* method;
+};
+
+inline RtResult<const metadata::RtMethodInfo*> get_virtual_method_impl_cached(vm::RtObject* obj, const metadata::RtMethodInfo* virtual_method,
+                                                                              AotVirtualCallSite& site) noexcept
+{
+    const metadata::RtClass* klass = obj->klass;
+    if (LEANCLR_CODEGEN_LIKELY(site.klass == klass))
+    {
+        RET_OK(site.method);
+    }
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(const metadata::RtMethodInfo*, impl, vm::Method::get_virtual_method_impl_on_klass(klass, virtual_method));
+    site.method = impl;
+    site.klass = klass;
+    RET_OK(impl);
+}
+
+// RuntimeHelpers.IsReferenceOrContainsReferences<T>() / IsBitwiseEquatable<T>() at one call site of generated code: the
+// runtime's own answer for the instantiation (the intrinsic the interpreter calls), asked once and kept in a
+// zero-initialized static next to the call (0 = not asked yet, 1 = false, 2 = true)
+RtResult<bool> is_reference_or_contains_references_of(const metadata::RtMethodInfo* method) noexcept;
+RtResult<bool> is_bitwise_equatable_of(const metadata::RtMethodInfo* method) noexcept;
+
+inline RtResult<int32_t> cached_type_predicate(int8_t& site, RtResult<bool> (*predicate)(const metadata::RtMethodInfo*),
+                                               const metadata::RtMethodInfo* method) noexcept
+{
+    if (LEANCLR_CODEGEN_LIKELY(site != 0))
+    {
+        RET_OK(site == 2 ? 1 : 0);
+    }
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(bool, value, predicate(method));
+    site = value ? 2 : 1;
+    RET_OK(value ? 1 : 0);
+}
+
+// Type.GetTypeFromHandle at one call site of generated code (typeof(T) in TryGetComponent<T> and the like): the
+// RuntimeType for the handle seen last. The objects come from the reflection maps, which are GC roots, and the heap does
+// not move objects, so the pointer stays valid.
+struct AotTypeFromHandleSite
+{
+    const void* handle;
+    vm::RtObject* type;
+};
+
+RtResult<vm::RtObject*> get_type_from_handle_uncached(const void* type_handle) noexcept;
+
+inline RtResult<vm::RtObject*> get_type_from_handle_cached(const void* type_handle, AotTypeFromHandleSite& site) noexcept
+{
+    if (LEANCLR_CODEGEN_LIKELY(site.handle == type_handle && type_handle != nullptr))
+    {
+        RET_OK(site.type);
+    }
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(vm::RtObject*, type, get_type_from_handle_uncached(type_handle));
+    site.handle = type_handle;
+    site.type = type;
+    RET_OK(type);
+}
+
+// Type.IsValueType at one call site (typeof(TKey).IsValueType in Dictionary.FindValue): the answer for the RuntimeType seen
+// last. Only RuntimeType objects are kept (they live in the reflection maps), any other Type is asked every time.
+struct AotTypeIsValueTypeSite
+{
+    vm::RtObject* type;
+    int32_t value;
+};
+
+RtResult<int32_t> type_is_value_type_uncached(vm::RtObject* type, AotTypeIsValueTypeSite& site) noexcept;
+
+inline RtResult<int32_t> type_is_value_type_cached(vm::RtObject* type, AotTypeIsValueTypeSite& site) noexcept
+{
+    if (LEANCLR_CODEGEN_LIKELY(site.type == type && type != nullptr))
+    {
+        RET_OK(site.value);
+    }
+    return type_is_value_type_uncached(type, site);
+}
 
 inline vm::RtObject* is_inst(vm::RtObject* obj, const metadata::RtClass* klass) noexcept
 {

@@ -10,6 +10,8 @@
 #include "vm/assembly.h"
 #include "vm/method.h"
 #include "vm/class.h"
+#include "intrinsics/system_runtime_compilerservices_runtimehelpers.h"
+#include "intrinsics/system_type.h"
 
 #if LEANCLR_PLATFORM_WIN
 #include <windows.h>
@@ -530,6 +532,33 @@ RtResult<vm::RtArray*> marshal_native_val_array_to_managed_array(void* native_ar
     const size_t ele_size = vm::Array::get_array_element_size(arr);
     std::memcpy(vm::Array::get_array_data_start_as_ptr_void(arr), native_array, native_element_count * ele_size);
     RET_OK(arr);
+}
+
+RtResult<bool> is_reference_or_contains_references_of(const metadata::RtMethodInfo* method) noexcept
+{
+    return intrinsics::SystemRuntimeCompilerServicesRuntimeHelpers::is_reference_or_contains_references(method);
+}
+
+RtResult<bool> is_bitwise_equatable_of(const metadata::RtMethodInfo* method) noexcept
+{
+    return intrinsics::SystemRuntimeCompilerServicesRuntimeHelpers::is_bitwise_equatable(method);
+}
+
+RtResult<vm::RtObject*> get_type_from_handle_uncached(const void* type_handle) noexcept
+{
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(vm::RtReflectionRuntimeType*, type, intrinsics::SystemType::get_type_from_handle(type_handle));
+    RET_OK(reinterpret_cast<vm::RtObject*>(type));
+}
+
+RtResult<int32_t> type_is_value_type_uncached(vm::RtObject* type, AotTypeIsValueTypeSite& site) noexcept
+{
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(bool, value, intrinsics::SystemType::get_is_value_type(reinterpret_cast<vm::RtReflectionRuntimeType*>(type)));
+    if (type != nullptr && type->klass == vm::Class::get_corlib_types().cls_runtimetype)
+    {
+        site.type = type;
+        site.value = value ? 1 : 0;
+    }
+    RET_OK(value ? 1 : 0);
 }
 
 } // namespace codegen

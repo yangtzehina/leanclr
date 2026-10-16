@@ -63,7 +63,9 @@ RtResult<bool> SystemType::equals(vm::RtReflectionRuntimeType* left, vm::RtRefle
                                             vm::Reflection::get_type_sig_from_reflection_type_object(&right->reflection_type));
 
     bool result = metadata::MetadataCompare::is_typesig_equal_ignore_attrs(left_type_sig, right_type_sig, false);
-    if (std::getenv("LEANCLR_REFLECTION_TRACE") != nullptr)
+    // Type == Type sits under Dictionary<Type, ...> lookups: read the switch once, not on every comparison
+    static const bool s_reflection_trace = std::getenv("LEANCLR_REFLECTION_TRACE") != nullptr;
+    if (s_reflection_trace)
     {
         std::fprintf(stderr, "leanclr-type-equals: left=%p right=%p left_sig=%p right_sig=%p result=%d\n",
                      left, right, left_type_sig, right_type_sig, result ? 1 : 0);
