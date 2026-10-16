@@ -31,8 +31,11 @@ namespace LeanAOT.ToCpp
 
         public CodeWriter MethodWriter => throw new NotImplementedException();
 
-        public ModuleRegistrationCppCodeFile(string filePath, AssemblyPlan plan)
+        private readonly AssemblyCache _assemblyCache;
+
+        public ModuleRegistrationCppCodeFile(string filePath, AssemblyPlan plan, AssemblyCache assemblyCache)
         {
+            _assemblyCache = assemblyCache;
             _totalWriter = new CodeWriter(filePath);
             _plan = plan;
             _mod = plan.Module;
@@ -58,6 +61,7 @@ namespace LeanAOT.ToCpp
             }
             AddModuleInitializationMethod();
             AddModuleDeferredInitializationMethod();
+            AddAssemblyBindingsDeclaration();
             AddModuleDataDeclaration();
         }
 
@@ -165,6 +169,56 @@ namespace LeanAOT.ToCpp
             _implWriter.AddLine("};");
         }
 
+        private string GetAssemblyBindingsVariableName()
+        {
+            return $"s_aot_bindings_{ModuleGenerationUtil.GetStandardizedModuleNameWithoutExt(_mod)}";
+        }
+
+        /// <summary>
+        /// The module itself, then every assembly in its reference closure (sorted by name): the generated code embeds
+        /// their layouts, tokens and direct calls, so the runtime attaches it only when all of these images carry the
+        /// same MVID as the ones read here.
+        /// </summary>
+        private List<ModuleDef> GetBindingClosure()
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var closure = new List<ModuleDef>();
+            var stack = new Stack<ModuleDef>();
+            stack.Push(_mod);
+            while (stack.Count > 0)
+            {
+                ModuleDef m = stack.Pop();
+                if (!seen.Add(m.Assembly.Name))
+                    continue;
+                closure.Add(m);
+                foreach (AssemblyRef ar in ((ModuleDefMD)m).GetAssemblyRefs())
+                {
+                    if (!_assemblyCache.LoadedModules.TryGetValue(ar.Name, out ModuleDefMD dep))
+                        dep = _assemblyCache.LoadModule(ar.Name);
+                    stack.Push(dep);
+                }
+            }
+            closure.Sort((a, b) => a == _mod ? -1 : b == _mod ? 1 : string.CompareOrdinal(a.Assembly.Name, b.Assembly.Name));
+            return closure;
+        }
+
+        private void AddAssemblyBindingsDeclaration()
+        {
+            _implWriter.AddLine();
+            _implWriter.AddLine($"static const leanclr::metadata::RtAotAssemblyBinding {GetAssemblyBindingsVariableName()}[] = {{");
+            _implWriter.IncreaseIndent();
+            foreach (ModuleDef m in GetBindingClosure())
+            {
+                Guid? mvid = m.Mvid;
+                if (mvid == null)
+                    throw new InvalidOperationException($"assembly {m.Assembly.Name} has no MVID; AOT code cannot be bound to it");
+                string bytes = string.Join(", ", mvid.Value.ToByteArray().Select(b => $"0x{b:x2}"));
+                _implWriter.AddLine($"{{ \"{m.Assembly.Name}\", {{ {bytes} }} }}, // {mvid.Value}");
+            }
+            _implWriter.DecreaseIndent();
+            _implWriter.AddLine("};");
+        }
+
         private void AddModuleDataDeclaration()
         {
             _implWriter.AddLine();
@@ -185,6 +239,8 @@ namespace LeanAOT.ToCpp
                 _implWriter.AddLine("nullptr,");
                 _implWriter.AddLine("0,");
             }
+            _implWriter.AddLine($"{GetAssemblyBindingsVariableName()},");
+            _implWriter.AddLine($"sizeof({GetAssemblyBindingsVariableName()}) / sizeof({GetAssemblyBindingsVariableName()}[0]),");
             _implWriter.DecreaseIndent();
             _implWriter.AddLine("};");
         }

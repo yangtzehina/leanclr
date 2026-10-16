@@ -85,7 +85,7 @@ namespace LeanAOT.ToCpp
         private void GenerateModuleRegistrationCpp(AssemblyPlan plan)
         {
             var context = GetAssemblyContext(plan);
-            var moduleRegistrationCppCodeFile = new ModuleRegistrationCppCodeFile($"{context.config.outputCodeDir}/{ModuleGenerationUtil.GetModuleRegistrationCppFileNameWithExt(plan.Module)}", plan);
+            var moduleRegistrationCppCodeFile = new ModuleRegistrationCppCodeFile($"{context.config.outputCodeDir}/{ModuleGenerationUtil.GetModuleRegistrationCppFileNameWithExt(plan.Module)}", plan, context.config.assemblyCache);
             moduleRegistrationCppCodeFile.Generate();
             moduleRegistrationCppCodeFile.Save();
         }

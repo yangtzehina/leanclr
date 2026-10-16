@@ -924,6 +924,15 @@ struct RtAotMethodMonoPInvokeCallbackData
     RtNativeMethodPointer native_method_ptr;
 };
 
+// One assembly the generated code of a module was compiled against (the module itself first, then every assembly in its
+// reference closure): AOT code embeds field layouts, tokens and direct calls of all of them, so it is only valid for
+// exactly these images. mvid = the 16 bytes of the Module table's MVID as stored in the #GUID heap.
+struct RtAotAssemblyBinding
+{
+    const char* assembly_name;
+    uint8_t mvid[16];
+};
+
 struct RtAotModuleData
 {
     const char* module_name;
@@ -933,6 +942,16 @@ struct RtAotModuleData
     uint32_t method_def_entry_count;
     const RtAotMethodMonoPInvokeCallbackData* mono_pinvoke_callback_entries;
     uint32_t mono_pinvoke_callback_entry_count;
+    // checked by AotModule::check_bindings before the module's AOT code is attached (see AotBindingPolicy)
+    const RtAotAssemblyBinding* bindings;
+    uint32_t binding_count;
+};
+
+enum class AotBindingPolicy : uint8_t
+{
+    Unchecked = 0, // attach by assembly name only (upstream behaviour)
+    Interpret = 1, // verify bindings; a module whose closure differs runs interpreted
+    Strict = 2,    // verify bindings; a mismatch fails the assembly load
 };
 
 struct RtAotModulesData

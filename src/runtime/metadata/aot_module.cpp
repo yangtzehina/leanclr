@@ -2,12 +2,138 @@
 #include "utils/hashmap.h"
 #include "utils/string_util.h"
 
+#include <cstdio>
+#include <cstring>
+
 namespace leanclr
 {
 namespace metadata
 {
 
 utils::HashMap<const char*, const RtAotModuleData*, utils::CStrHasher, utils::CStrCompare> s_aotModuleMap;
+
+static AotBindingPolicy s_bindingPolicy = AotBindingPolicy::Unchecked;
+static uint32_t s_attachedModules = 0;
+static uint32_t s_attachedMethods = 0;
+static uint32_t s_rejectedModules = 0;
+static char s_lastRejection[320] = {0};
+
+static const uint8_t* get_module_mvid(const RtModuleDef* module)
+{
+    auto row = module->get_cli_image().read_module(1);
+    if (!row || row->mvid == 0)
+    {
+        return nullptr;
+    }
+    const auto& heap = module->get_cli_image().get_guid_heap();
+    uint64_t offset = static_cast<uint64_t>(row->mvid - 1) * 16u;
+    if (offset + 16u > heap.size)
+    {
+        return nullptr;
+    }
+    return heap.data + offset;
+}
+
+static void format_mvid(char* out, const uint8_t* mvid)
+{
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < 8; i++)
+    {
+        out[i * 2] = hex[mvid[i] >> 4];
+        out[i * 2 + 1] = hex[mvid[i] & 15];
+    }
+    out[16] = 0;
+}
+
+void AotModule::set_binding_policy(AotBindingPolicy policy)
+{
+    s_bindingPolicy = policy;
+}
+
+AotBindingPolicy AotModule::get_binding_policy()
+{
+    return s_bindingPolicy;
+}
+
+uint32_t AotModule::get_attached_module_count()
+{
+    return s_attachedModules;
+}
+
+uint32_t AotModule::get_attached_method_count()
+{
+    return s_attachedMethods;
+}
+
+uint32_t AotModule::get_rejected_module_count()
+{
+    return s_rejectedModules;
+}
+
+const char* AotModule::get_last_rejection()
+{
+    return s_lastRejection;
+}
+
+void AotModule::note_attached(const RtAotModuleData* aot_data)
+{
+    s_attachedModules++;
+    s_attachedMethods += aot_data->method_def_entry_count;
+}
+
+RtResult<bool> AotModule::check_bindings(const RtModuleDef* mod, const RtAotModuleData* aot_data)
+{
+    if (s_bindingPolicy == AotBindingPolicy::Unchecked)
+    {
+        RET_OK(true);
+    }
+    const char* problem = nullptr;
+    const char* dep_name = "";
+    char have[17] = "-";
+    char want[17] = "-";
+    if (aot_data->binding_count == 0 || aot_data->bindings == nullptr)
+    {
+        problem = "no binding data in the generated code";
+    }
+    for (uint32_t i = 0; problem == nullptr && i < aot_data->binding_count; i++)
+    {
+        const RtAotAssemblyBinding& b = aot_data->bindings[i];
+        dep_name = b.assembly_name;
+        // the module itself is not registered yet while its AOT data is being checked
+        const RtModuleDef* dep = std::strcmp(b.assembly_name, mod->get_name_no_ext()) == 0 ? mod : RtModuleDef::find_module(b.assembly_name);
+        if (dep == nullptr)
+        {
+            problem = "not loaded";
+            break;
+        }
+        const uint8_t* mvid = get_module_mvid(dep);
+        format_mvid(want, b.mvid);
+        if (mvid == nullptr)
+        {
+            problem = "has no MVID";
+            break;
+        }
+        if (std::memcmp(mvid, b.mvid, 16) != 0)
+        {
+            format_mvid(have, mvid);
+            problem = "MVID differs";
+            break;
+        }
+    }
+    if (problem == nullptr)
+    {
+        RET_OK(true);
+    }
+    s_rejectedModules++;
+    std::snprintf(s_lastRejection, sizeof(s_lastRejection), "AOT code of %s not used: %s %s (loaded %s, generated against %s)",
+                  mod->get_name_no_ext(), dep_name, problem, have, want);
+    std::fprintf(stderr, "[leanclr] %s%s\n", s_lastRejection, s_bindingPolicy == AotBindingPolicy::Strict ? "" : "; running it interpreted");
+    if (s_bindingPolicy == AotBindingPolicy::Strict)
+    {
+        RET_ERR(RtErr::BadImageFormat);
+    }
+    RET_OK(false);
+}
 
 void AotModule::register_aot_modules(const RtAotModulesData* initData)
 {

@@ -176,6 +176,16 @@ RtResult<metadata::RtAssembly*> Assembly::load_from_data(const AssemblyData& dll
     const metadata::RtAotModuleData* aotModuleData = metadata::AotModule::find_aot_module_by_name(mod->get_name_no_ext());
     if (aotModuleData != nullptr)
     {
+        // the reference closure is loaded now: attach only if every image matches the one the code was generated from
+        DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(bool, bound, metadata::AotModule::check_bindings(mod, aotModuleData));
+        if (!bound)
+        {
+            aotModuleData = nullptr;
+        }
+    }
+    if (aotModuleData != nullptr)
+    {
+        metadata::AotModule::note_attached(aotModuleData);
         mod->set_aot_module_data(aotModuleData);
         if (aotModuleData->initializer != nullptr)
         {
