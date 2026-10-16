@@ -4,8 +4,10 @@
 #include "utils/hashmap.h"
 #include "utils/string_util.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace leanclr
 {
@@ -16,6 +18,24 @@ utils::HashMap<const char*, const RtAotModuleData*, utils::CStrHasher, utils::CS
 // key -> instantiation, filled from each module's generic_method_entries when its AOT code is attached
 static utils::HashMap<const char*, const RtAotGenericMethodData*, utils::CStrHasher, utils::CStrCompare> s_genericMethodMap;
 static uint32_t s_attachedGenericMethods = 0;
+// The generic method definitions ("<assembly>!<rid>" key prefixes) that have compiled instantiations, by assembly name, and
+// the same resolved per module id: a method whose definition has none is rejected without formatting its key (most of the
+// generic methods a program inflates, e.g. every method of each generic class instance). Collected cheaply at attach
+// (no allocation per entry; the rid lists are sorted on first use) and resolved per module on the first lookup after an
+// attach, since a later module can bring instantiations of an earlier module's methods.
+struct GenericDefRids
+{
+    const char* assembly; // points into a key: not 0-terminated
+    size_t assembly_len;
+    std::vector<uint32_t> rids;
+    bool sorted;
+};
+static std::vector<GenericDefRids> s_genericDefRids;
+static std::vector<GenericDefRids*> s_genericDefRidsByModule;
+static std::vector<uint8_t> s_genericDefRidsResolved;
+// get_invoker and get_method_pointer look up the same method back to back
+static const RtMethodInfo* s_lastGenericMethod = nullptr;
+static const RtAotMethodDefData* s_lastGenericResult = nullptr;
 
 // Diagnostics (bisecting a wrong instantiation): LEANCLR_AOT_GENERIC_RANGE=lo:hi uses only the compiled instantiations whose
 // registration index (attach order, then table order) is in [lo, hi); LEANCLR_AOT_GENERIC_ONLY=<key> only that one;
@@ -113,20 +133,69 @@ const char* AotModule::get_last_rejection()
     return s_lastRejection;
 }
 
+// "<assembly>!<hex rid><...>" -> s_genericDefRids
+static void note_generic_def(const char* key)
+{
+    size_t len = 0;
+    while (key[len] != '!' && key[len] != 0)
+        len++;
+    if (key[len] != '!')
+        return;
+    uint32_t rid = 0;
+    for (const char* p = key + len + 1;; p++)
+    {
+        char c = *p;
+        if (c >= '0' && c <= '9')
+            rid = (rid << 4) | static_cast<uint32_t>(c - '0');
+        else if (c >= 'a' && c <= 'f')
+            rid = (rid << 4) | static_cast<uint32_t>(c - 'a' + 10);
+        else
+            break;
+    }
+    // entries come grouped by assembly: try the previous entry's group first
+    static size_t last = SIZE_MAX;
+    auto same = [key, len](const GenericDefRids& g) { return g.assembly_len == len && std::memcmp(g.assembly, key, len) == 0; };
+    if (last >= s_genericDefRids.size() || !same(s_genericDefRids[last]))
+    {
+        last = SIZE_MAX;
+        for (size_t i = 0; i < s_genericDefRids.size() && last == SIZE_MAX; i++)
+        {
+            if (same(s_genericDefRids[i]))
+                last = i;
+        }
+        if (last == SIZE_MAX)
+        {
+            s_genericDefRids.push_back(GenericDefRids{key, len, {}, true});
+            last = s_genericDefRids.size() - 1;
+        }
+    }
+    s_genericDefRids[last].rids.push_back(rid);
+    s_genericDefRids[last].sorted = false;
+}
+
 void AotModule::note_attached(const RtAotModuleData* aot_data)
 {
     s_attachedModules++;
     s_attachedMethods += aot_data->method_def_entry_count;
+    const GenericDiag& diag = generic_diag();
+    const bool diag_active = diag.trace || diag.only != nullptr || diag.lo != 0 || diag.hi != UINT32_MAX;
+    s_genericMethodMap.reserve(s_genericMethodMap.size() + aot_data->generic_method_entry_count);
     for (uint32_t i = 0; i < aot_data->generic_method_entry_count; i++)
     {
         const RtAotGenericMethodData* entry = aot_data->generic_method_entries + i;
-        if (s_genericMethodMap.find(entry->key) == s_genericMethodMap.end())
+        if (s_genericMethodMap.insert({entry->key, entry}).second)
         {
-            s_genericMethodMap.insert({entry->key, entry});
-            s_genericIndex.insert({entry, s_attachedGenericMethods});
+            note_generic_def(entry->key);
+            if (diag_active)
+            {
+                s_genericIndex.insert({entry, s_attachedGenericMethods});
+            }
             s_attachedGenericMethods++;
         }
     }
+    s_genericDefRidsByModule.clear();
+    s_genericDefRidsResolved.clear();
+    s_lastGenericMethod = nullptr;
 }
 
 uint32_t AotModule::get_attached_generic_method_count()
@@ -273,6 +342,41 @@ bool append_type_key(KeyWriter& w, const RtTypeSig* sig, int depth)
 }
 } // namespace
 
+// whether any compiled instantiation has this generic method definition
+static bool has_generic_method_def(uint32_t method_def_gid)
+{
+    uint32_t module_id = RtMetadata::decode_module_id_from_gid(method_def_gid);
+    if (module_id >= s_genericDefRidsResolved.size())
+    {
+        s_genericDefRidsResolved.resize(module_id + 1, 0);
+        s_genericDefRidsByModule.resize(module_id + 1, nullptr);
+    }
+    if (!s_genericDefRidsResolved[module_id])
+    {
+        RtModuleDef* mod = RtModuleDef::get_module_by_id(module_id);
+        if (mod == nullptr)
+            return false;
+        const char* name = mod->get_name_no_ext();
+        size_t len = std::strlen(name);
+        GenericDefRids* found = nullptr;
+        for (auto& g : s_genericDefRids)
+        {
+            if (g.assembly_len == len && std::memcmp(g.assembly, name, len) == 0)
+                found = &g;
+        }
+        if (found != nullptr && !found->sorted)
+        {
+            std::sort(found->rids.begin(), found->rids.end());
+            found->rids.erase(std::unique(found->rids.begin(), found->rids.end()), found->rids.end());
+            found->sorted = true;
+        }
+        s_genericDefRidsByModule[module_id] = found;
+        s_genericDefRidsResolved[module_id] = 1;
+    }
+    const GenericDefRids* group = s_genericDefRidsByModule[module_id];
+    return group != nullptr && std::binary_search(group->rids.begin(), group->rids.end(), RtMetadata::decode_rid_from_gid(method_def_gid));
+}
+
 bool AotModule::format_generic_method_key(const RtMethodInfo* method, char* buf, size_t size)
 {
     const RtGenericMethod* gm = method->generic_method;
@@ -365,15 +469,21 @@ const RtAotMethodDefData* AotModule::find_aot_method_impl(const RtMethodInfo* me
 {
     if (method->generic_method != nullptr)
     {
-        if (s_genericMethodMap.size() == 0)
+        if (s_genericMethodMap.size() == 0 || !has_generic_method_def(method->generic_method->base_method_gid))
         {
             return nullptr;
+        }
+        if (method == s_lastGenericMethod)
+        {
+            return s_lastGenericResult;
         }
         char key[512];
         if (!format_generic_method_key(method, key, sizeof(key)))
         {
             return nullptr;
         }
+        s_lastGenericMethod = method;
+        s_lastGenericResult = nullptr;
         auto it = s_genericMethodMap.find(key);
         if (it == s_genericMethodMap.end())
         {
@@ -397,6 +507,7 @@ const RtAotMethodDefData* AotModule::find_aot_method_impl(const RtMethodInfo* me
         {
             *entry->self_slot = method;
         }
+        s_lastGenericResult = &entry->data;
         return &entry->data;
     }
     if (method->generic_container != nullptr || method->parent->generic_container != nullptr)
