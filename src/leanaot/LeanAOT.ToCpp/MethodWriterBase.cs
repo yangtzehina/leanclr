@@ -91,6 +91,14 @@ namespace LeanAOT.ToCpp
         private int _nextAotRootSlot = 0;
         private readonly Dictionary<int, int> _aotRootSlots = new Dictionary<int, int>();
 
+        // SZ-array locals and arguments whose address is never taken keep their length in an int32_t beside them, so a bounds
+        // check or ldlen on a value just loaded from one reads a register instead of memory: without strict aliasing every
+        // store in a loop forces ->length to be loaded again, which keeps the check (and the load) inside the loop.
+        private readonly Dictionary<object, string> _arrayLengthCacheNames = new Dictionary<object, string>();
+        private readonly Dictionary<object, int> _arrayLengthCacheVersions = new Dictionary<object, int>();
+        // eval variable id -> the local or argument it was loaded from and that one's version then; cleared at each basic block
+        private readonly Dictionary<int, (object owner, int version)> _arrayLengthSources = new Dictionary<int, (object owner, int version)>();
+
 
         private Dictionary<BasicBlock, EvalStackState> _blockEvalStackStates;
 
@@ -275,6 +283,77 @@ namespace LeanAOT.ToCpp
                 _forwardDeclaration.AddTypeForwardDefine(local.Type);
                 _localsWriter.AddLine($"{GetExactTypeName(local.Type)} {GetLocalName(local)}{(initLocals ? " = {}" : "")};");
             }
+            WriteArrayLengthCacheDeclarations();
+        }
+
+        private void WriteArrayLengthCacheDeclarations()
+        {
+            var body = _method.MethodDef.Body;
+            var addressTaken = new HashSet<object>();
+            foreach (var inst in body.Instructions)
+            {
+                switch (inst.OpCode.Code)
+                {
+                case Code.Ldloca:
+                case Code.Ldloca_S:
+                    addressTaken.Add(_localVariables[inst.GetLocal(body.Variables).Index]);
+                    break;
+                case Code.Ldarga:
+                case Code.Ldarga_S:
+                    addressTaken.Add(_parameterVariables[inst.GetParameter(_method.MethodDef.Parameters).Index]);
+                    break;
+                }
+            }
+            foreach (var param in _parameterVariables)
+            {
+                if (param.Type.RemovePinnedAndModifiers() is SZArraySig && !addressTaken.Contains(param))
+                {
+                    string name = GetParameterName(param);
+                    string lengthName = $"{name}_len";
+                    _arrayLengthCacheNames.Add(param, lengthName);
+                    _arrayLengthCacheVersions.Add(param, 0);
+                    _localsWriter.AddLine($"int32_t {lengthName} = {name} != nullptr ? (({ConstStrings.ArrayPtrTypeName})({name}))->length : 0;");
+                }
+            }
+            foreach (var local in _localVariables)
+            {
+                if (local.Type.RemovePinnedAndModifiers() is SZArraySig && !addressTaken.Contains(local))
+                {
+                    string lengthName = $"{GetLocalName(local)}_len";
+                    _arrayLengthCacheNames.Add(local, lengthName);
+                    _arrayLengthCacheVersions.Add(local, 0);
+                    _localsWriter.AddLine($"int32_t {lengthName} = 0;");
+                }
+            }
+        }
+
+        private void TrackArrayLengthSource(EvalVariable loadedVar, object owner)
+        {
+            if (_arrayLengthCacheVersions.TryGetValue(owner, out int version))
+            {
+                _arrayLengthSources[loadedVar.varId] = (owner, version);
+            }
+        }
+
+        private void EmitUpdateArrayLengthCache(object owner, string varName)
+        {
+            if (!_arrayLengthCacheNames.TryGetValue(owner, out string lengthName))
+            {
+                return;
+            }
+            _arrayLengthCacheVersions[owner]++;
+            _bodyWriter.AddLine($"{lengthName} = {varName} != nullptr ? (({ConstStrings.ArrayPtrTypeName})({varName}))->length : 0;");
+        }
+
+        /// <summary>The cached length of the array in <paramref name="arrayVar"/>, when it was loaded in this basic block from a
+        /// local or argument that has not been stored to since; null otherwise.</summary>
+        private string GetCachedArrayLength(EvalVariable arrayVar)
+        {
+            if (_arrayLengthSources.TryGetValue(arrayVar.varId, out var source) && _arrayLengthCacheVersions[source.owner] == source.version)
+            {
+                return _arrayLengthCacheNames[source.owner];
+            }
+            return null;
         }
 
         void WriteMethodEnd()
@@ -1168,6 +1247,7 @@ namespace LeanAOT.ToCpp
             string typeName = GetTypeName(newVar);
             _bodyWriter.AddLine($"{typeName} {GetEvalVariableName(newVar)} = {GetVariableMayCast(p, newVar)};");
             EmitSyncAotRoot(newVar);
+            TrackArrayLengthSource(newVar, p);
         }
 
         private void EmitLoadArgAddress(Instruction inst, ParameterVariable p)
@@ -1181,6 +1261,7 @@ namespace LeanAOT.ToCpp
         {
             var srcVar = Pop();
             _bodyWriter.AddLine($"{GetParameterName(p)} = {GetVariableMayCast(srcVar, p)};");
+            EmitUpdateArrayLengthCache(p, GetParameterName(p));
             EmitSyncAotRoot(p);
             EmitClearAotRoot(srcVar);
         }
@@ -1190,12 +1271,14 @@ namespace LeanAOT.ToCpp
             var newVar = CreateNewAndPushStack(local._evalVariable);
             _bodyWriter.AddLine($"{GetTypeName(newVar)} {GetEvalVariableName(newVar)} = {GetVariableMayCast(local, newVar)};");
             EmitSyncAotRoot(newVar);
+            TrackArrayLengthSource(newVar, local);
         }
 
         private void EmitStoreLocal(Instruction inst, LocalVariable local)
         {
             var srcVar = Pop();
             _bodyWriter.AddLine($"{GetLocalName(local)} = {GetVariableMayCast(srcVar, local)};");
+            EmitUpdateArrayLengthCache(local, GetLocalName(local));
             EmitSyncAotRoot(local);
             EmitClearAotRoot(srcVar);
         }
@@ -3213,8 +3296,9 @@ namespace LeanAOT.ToCpp
             }
             string arrVarExpr = GetVariableMayCast(objVar, ConstStrings.ArrayPtrTypeName);
             string indexVarExpr = GetVariableMayCast(indexVar, "int32_t");
-            EmitAssumeCondition($"({arrVarExpr})->length >= 0");
-            _bodyWriter.AddLine($"if ({GetUnlikelyExpr($"(uint32_t)({indexVarExpr}) >= (uint32_t)({arrVarExpr})->length")})");
+            string lengthExpr = GetCachedArrayLength(objVar) ?? $"({arrVarExpr})->length";
+            EmitAssumeCondition($"{lengthExpr} >= 0");
+            _bodyWriter.AddLine($"if ({GetUnlikelyExpr($"(uint32_t)({indexVarExpr}) >= (uint32_t)({lengthExpr})")})");
             _bodyWriter.AddLine("{");
             _bodyWriter.IncreaseIndent();
             EmitThrowRuntimeError(inst, "IndexOutOfRange");
@@ -3244,8 +3328,9 @@ namespace LeanAOT.ToCpp
             var retVar = PushStack(EvalDataType.Int32);
             EmitCheckNotNull(inst, arrayVar, force: true);
             string arrayVarExpr = GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName);
-            EmitAssumeCondition($"({arrayVarExpr})->length >= 0");
-            _bodyWriter.AddLine($"{GetTypeName(retVar)} {GetEvalVariableName(retVar)} = ({arrayVarExpr})->length;");
+            string lengthExpr = GetCachedArrayLength(arrayVar) ?? $"({arrayVarExpr})->length";
+            EmitAssumeCondition($"{lengthExpr} >= 0");
+            _bodyWriter.AddLine($"{GetTypeName(retVar)} {GetEvalVariableName(retVar)} = {lengthExpr};");
         }
 
         private void EmitLdelema(Instruction inst, ITypeDefOrRef elementType, uint token)
@@ -3672,6 +3757,7 @@ namespace LeanAOT.ToCpp
                     continue;
                 _curBb = block;
                 _curState = state;
+                _arrayLengthSources.Clear();
                 EmitBasicBlockLabel(block);
                 _bodyWriter.AddLine("{");
                 _bodyWriter.IncreaseIndent();

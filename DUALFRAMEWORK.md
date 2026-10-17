@@ -39,6 +39,7 @@
 | 0018 TypeRef resolution cache | `b60b7b4` | 冷启动：TypeRef → TypeDef 每次都按名字到被引用的模块里查（System.Runtime 这类门面还要再经类型转发到 CoreLib）。每个模块按 rid 缓存解析成功的结果，失败不缓存 | 门槛 2：冷启动 |
 | 0019 AOT: Span members in place | — | `Span<T>` / `ReadOnlySpan<T>` 的下标、`Length`、`IsEmpty`、`Slice` 和 `MemoryMarshal.GetReference` 原地展开，见下文「热循环」 | 交通模拟测速：Span 写法比数组慢 3 倍 |
 | 0020 AOT: vector element access | — | `ldelem / stelem / ldelema` 直接从 `first_data` 算地址，不再每次经 `klass->by_val->ele_type` 判断有没有多维数组的边界 | 读 0019 之后生成的 C++ |
+| 0021 AOT: cached array lengths | — | 地址没被取过的数组局部变量和参数，长度存进旁边的 `int32_t`，越界检查和 `ldlen` 读它 | 在生成的 C++ 上逐项去掉检查测份量：越界检查占局部变量写法的 20% |
 
 「门槛」是框架阶段 0 的验收：1 = 每条命令的耗时，2 = 冷启动到第一局。每个提交的正文有更细的说明和测量。
 
@@ -108,6 +109,7 @@ try / catch / finally / fault 都编，只有异常过滤器留给解释器。�
 
 - 0019：`span[i]`、`Length`、`IsEmpty`、`Slice` 原来都是调用 CoreLib 的方法，每次一个元数据初始化检查、一次 `AotFrameScope`、一个带错误码的返回，Span 写法因此比数组还慢 3 倍。现在按 IL 方法体原地写成比较加地址计算，失败时抛的异常和 IL 一样（下标 IndexOutOfRange，Slice ArgumentOutOfRange，`Slice(start, length)` 用 64 位的判断）；`MemoryMarshal.GetReference(span)` 直接取 `_reference`。实例字段不是恰好 `_reference`、`_length` 的照旧调用。
 - 0020：IL 的 `ldelem / stelem / ldelema` 只接受一维、从零开始的数组（ECMA-335 III.4.7），数据从 `first_data` 开始。原来用的是兼顾多维数组的 `vm::Array` 版本，每次读写都要读 `klass->by_val->ele_type`；运行时用 `-fno-strict-aliasing` 编，循环里每写一次内存，这两次读都要重来。`MemoryMarshal.GetArrayDataReference(T[])` 也改用它。
+- 0021：地址没被取过（没有 `ldloca / ldarga`）的数组局部变量和参数各带一个 `int32_t` 长度，每次 `stloc / starg` 后更新（null 记 0：越界检查之前已经判过空），参数在入口算一次。越界检查和 `ldlen` 只对「同一个基本块里从这个变量读出来、之后变量没被写过」的值用它（`a[(a = b).Length - 1]` 这种先读数组再改变量的照旧读内存）。长度进了寄存器以后，clang 能合并局部变量上重复的判空：在生成的 C++ 上再去掉全部判空，局部变量写法不再变快。剩下的越界检查全去掉还能再快约 27%，多半是拿读出来的值当下标，提不出循环。
 
 ## 冷启动（0016–0018）
 
