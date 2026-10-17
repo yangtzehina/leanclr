@@ -3,6 +3,7 @@
 #include "settings.h"
 #include "gc/garbage_collector.h"
 #include "gc/gc_finalizer.h"
+#include "interp/machine_state.h"
 
 namespace leanclr
 {
@@ -73,6 +74,15 @@ int32_t GC::get_max_generation()
 
 void GC::collect(int32_t generation)
 {
+    // GC.Collect from managed code: with managed frames on the stack a collection frees what they still use (an
+    // interpreter caller's eval-stack temporaries across the call, an array reached only through a Span's interior
+    // pointer; AOT code built with --leanaot-no-gc-roots keeps every reference in C++ locals), so it only sets a request
+    // that the next collection between calls (GarbageCollector::maybe_collect / collect) honours
+    if (interp::MachineState::get_global_machine_state().get_frame_stack_top() > 0)
+    {
+        gc::GarbageCollector::request_collect();
+        return;
+    }
     gc::GarbageCollector::collect();
 }
 

@@ -40,6 +40,7 @@
 | 0019 AOT: Span members in place | — | `Span<T>` / `ReadOnlySpan<T>` 的下标、`Length`、`IsEmpty`、`Slice` 和 `MemoryMarshal.GetReference` 原地展开，见下文「热循环」 | 交通模拟测速：Span 写法比数组慢 3 倍 |
 | 0020 AOT: vector element access | — | `ldelem / stelem / ldelema` 直接从 `first_data` 算地址，不再每次经 `klass->by_val->ele_type` 判断有没有多维数组的边界 | 读 0019 之后生成的 C++ |
 | 0021 AOT: cached array lengths | — | 地址没被取过的数组局部变量和参数，长度存进旁边的 `int32_t`，越界检查和 `ldlen` 读它 | 在生成的 C++ 上逐项去掉检查测份量：越界检查占局部变量写法的 20% |
+| 0022 GC.Collect between calls | — | 有托管帧在栈上时 `GC.Collect` 只记下请求，下一次调用之间的回收（`maybe_collect` / `collect`）执行 | 0019–0021 的一致性用例：调用中途回收时，解释器丢了调用方求值栈上的临时对象（段错误），只被 Span 指着的数组被回收 |
 
 「门槛」是框架阶段 0 的验收：1 = 每条命令的耗时，2 = 冷启动到第一局。每个提交的正文有更细的说明和测量。
 
@@ -101,7 +102,7 @@ try / catch / finally / fault 都编，只有异常过滤器留给解释器。�
 - LeanAOT `--leanaot-no-exception-handlers` 关掉（用来二分或对比）。
 - 一致性：同一份 IL 在 CoreCLR、AOT（strict）和解释器上三份输出逐行相同（框架的 `runtime:aot:eh`），覆盖 catch 顺序 / 类型不匹配 /
   运行时错误 / 泛型 catch 类型、return 穿过三层 finally、goto 跳出嵌套 try、finally 里抛、rethrow、using / foreach / lock、
-  AOT ↔ 解释器双向穿越、处理块里 GC。它也找出了解释器的 0015。
+  AOT ↔ 解释器双向穿越、处理块里 GC（0022 之后只是请求）。它也找出了解释器的 0015。
 
 ### 热循环（0019–0021、0023）
 
@@ -125,6 +126,6 @@ try / catch / finally / fault 都编，只有异常过滤器留给解释器。�
 
 ## 已知限制
 
-- GC 不扫原生栈：只能在两次托管调用之间回收，一次调用里分配的东西会留到调用结束（宿主在调用之间触发 GC）。
+- GC 不扫原生栈：只在两次托管调用之间回收，一次调用里分配的东西会留到调用结束（宿主在调用之间触发 GC）；调用当中的 `GC.Collect` 只记下请求，下一次回收时执行（0022）。
 - 编译选项：`LEANCLR_WASM_OPT`（Emscripten 优化参数，0006）、`LEANCLR_GC_DEBUG`（被回收的对象清零，漏登记的根会立刻出错）、
   `LEANCLR_ENABLE_PROFILE`（剖析构建，0010）；运行时环境变量 `LEANCLR_THROW_TRACE=1` 打印抛异常时的解释器调用栈（0003）。

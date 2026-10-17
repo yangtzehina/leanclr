@@ -16,6 +16,7 @@ class GC
     static void register_ephemeron_array(vm::RtObject* arr);
     static int32_t get_collection_count(int32_t generation);
     static int32_t get_max_generation();
+    // with managed frames on the stack: only a request, run by the next collection between calls
     static void collect(int32_t generation);
     static int32_t collect_a_little();
     static void internal_collect(int32_t generation);

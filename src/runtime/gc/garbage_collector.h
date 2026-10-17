@@ -39,12 +39,25 @@ class GarbageCollector
 
     static void collect()
     {
+        s_collect_requested = false;
         GcHeapImpl::collect();
     }
 
     static bool maybe_collect()
     {
+        if (s_collect_requested)
+        {
+            collect();
+            return true;
+        }
         return GcHeapImpl::maybe_collect();
+    }
+
+    // a collection asked for where it may not run (vm::GC::collect with managed frames on the stack): the next collect /
+    // maybe_collect runs it
+    static void request_collect()
+    {
+        s_collect_requested = true;
     }
 
     static bool should_collect(bool force)
@@ -106,6 +119,9 @@ class GarbageCollector
     {
         return GcHeapImpl::allocate_array(arrClass, totalBytes, site);
     }
+
+  private:
+    static bool s_collect_requested;
 };
 } // namespace gc
 } // namespace leanclr
