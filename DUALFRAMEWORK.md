@@ -37,11 +37,11 @@
 | 0016 invoker name prefilter | `26869e6` | 冷启动：`Shim::get_invoker`（每个类初始化方法表、每个泛型方法膨胀都调）原来为 icall / intrinsic 查表把方法全名拼出来再按字符串查，碰到的每个方法都要拼，命中的只有 CoreLib 的少数几个。每张表加一个 `MethodNameFilter`（`utils/method_name_filter.h`），见下文「冷启动」 | 门槛 2：冷启动 |
 | 0017 AOT generic lookup prefilter | `007ae8e` | 冷启动：`find_aot_method_impl` 对每个膨胀的泛型方法都拼完整的实例化键再查。挂 AOT 模块时记下哪些泛型方法定义有编好的实例化，查找先看定义在不在、在才拼键 | 门槛 2：冷启动 |
 | 0018 TypeRef resolution cache | `b60b7b4` | 冷启动：TypeRef → TypeDef 每次都按名字到被引用的模块里查（System.Runtime 这类门面还要再经类型转发到 CoreLib）。每个模块按 rid 缓存解析成功的结果，失败不缓存 | 门槛 2：冷启动 |
-| 0019 AOT: Span members in place | — | `Span<T>` / `ReadOnlySpan<T>` 的下标、`Length`、`IsEmpty`、`Slice` 和 `MemoryMarshal.GetReference` 原地展开，见下文「热循环」 | 交通模拟测速：Span 写法比数组慢 3 倍 |
-| 0020 AOT: vector element access | — | `ldelem / stelem / ldelema` 直接从 `first_data` 算地址，不再每次经 `klass->by_val->ele_type` 判断有没有多维数组的边界 | 读 0019 之后生成的 C++ |
-| 0021 AOT: cached array lengths | — | 地址没被取过的数组局部变量和参数，长度存进旁边的 `int32_t`，越界检查和 `ldlen` 读它 | 在生成的 C++ 上逐项去掉检查测份量：越界检查占局部变量写法的 20% |
-| 0022 GC.Collect between calls | — | 有托管帧在栈上时 `GC.Collect` 只记下请求，下一次调用之间的回收（`maybe_collect` / `collect`）执行 | 0019–0021 的一致性用例：调用中途回收时，解释器丢了调用方求值栈上的临时对象（段错误），只被 Span 指着的数组被回收 |
-| 0023 AOT without GC roots | — | LeanAOT `--leanaot-no-gc-roots`：不生成每个方法的 GC 根槽，引用只放在 C++ 局部变量里，见下文「热循环」 | 0021 之后再拆：GC 根的写入占局部变量写法的 21% |
+| 0019 AOT: Span members in place | `af4428b` | `Span<T>` / `ReadOnlySpan<T>` 的下标、`Length`、`IsEmpty`、`Slice` 和 `MemoryMarshal.GetReference` 原地展开，见下文「热循环」 | 交通模拟测速：Span 写法比数组慢 3 倍 |
+| 0020 AOT: vector element access | `45991f5` | `ldelem / stelem / ldelema` 直接从 `first_data` 算地址，不再每次经 `klass->by_val->ele_type` 判断有没有多维数组的边界 | 读 0019 之后生成的 C++ |
+| 0021 AOT: cached array lengths | `1f77179` | 地址没被取过的数组局部变量和参数，长度存进旁边的 `int32_t`，越界检查和 `ldlen` 读它 | 在生成的 C++ 上逐项去掉检查测份量：越界检查占局部变量写法的 20% |
+| 0022 GC.Collect between calls | `dae6627` | 有托管帧在栈上时 `GC.Collect` 只记下请求，下一次调用之间的回收（`maybe_collect` / `collect`）执行 | 0019–0021 的一致性用例：调用中途回收时，解释器丢了调用方求值栈上的临时对象（段错误），只被 Span 指着的数组被回收 |
+| 0023 AOT without GC roots | `483dbf3` | LeanAOT `--leanaot-no-gc-roots`：不生成每个方法的 GC 根槽，引用只放在 C++ 局部变量里，见下文「热循环」 | 0021 之后再拆：GC 根的写入占局部变量写法的 21% |
 
 「门槛」是框架阶段 0 的验收：1 = 每条命令的耗时，2 = 冷启动到第一局。每个提交的正文有更细的说明和测量。
 
@@ -114,6 +114,22 @@ try / catch / finally / fault 都编，只有异常过滤器留给解释器。�
 - 0021：地址没被取过（没有 `ldloca / ldarga`）的数组局部变量和参数各带一个 `int32_t` 长度，每次 `stloc / starg` 后更新（null 记 0：越界检查之前已经判过空），参数在入口算一次。越界检查和 `ldlen` 只对「同一个基本块里从这个变量读出来、之后变量没被写过」的值用它（`a[(a = b).Length - 1]` 这种先读数组再改变量的照旧读内存）。长度进了寄存器以后，clang 能合并局部变量上重复的判空：在生成的 C++ 上再去掉全部判空，局部变量写法不再变快。剩下的越界检查全去掉还能再快约 27%，多半是拿读出来的值当下标，提不出循环。
 - 0023：`__leanclr_aot_roots` 是每个方法一块的根槽，求值栈上每放一个引用写一次、用完清一次。0022 之后调用当中不回收，这些根没有人扫；`--leanaot-no-gc-roots` 不再生成，`AotFrameScope` 只记方法（栈回溯、异常展开照旧）。默认照旧生成，框架关掉（`RH_AOT_GC_ROOTS=1` 换回来）。
 
+测速（ms，中位数，同一份 DLL 交错跑 5 轮，单次上下浮动约 15%；0023 另外和 0021 交替跑了 10 轮：数组 0.99 → 0.84，局部变量 0.68 → 0.54）：
+
+| | 数组（每次从字段读） | 局部变量 | Span | `fixed` 指针 | friflo ECS |
+|---|---:|---:|---:|---:|---:|
+| 0018 | 1.46 | 1.15 | 4.31 | 0.47 | 3.88 |
+| 0019 | 1.42 | 1.20 | 0.58 | 0.45 | 2.85 |
+| 0020 + 0021 | 0.97 | 0.67 | 0.60 | 0.47 | 2.66 |
+| 0023 | 0.89 | 0.63 | 0.66 | 0.49 | 2.52 |
+| Mono AOT（.NET 10） | 0.84 | 0.54 | 0.64 | 0.47 | 2.02 |
+
+这个测试程序的 AOT wasm 5.42 → 4.84 MB，其中 0.50 MB 是 GC 根。从字段读数组还是比局部变量慢一截：每次写内存后都要重读字段、重新判空，
+要合并得知道字段和数组元素不会别名，生成的 C++ 里表达不了。
+
+- 一致性：框架的 `runtime:aot:eh` 加了 `tests/runtime/eh/EhCheck.Arrays.cs`（数组、Span、调用当中的 GC.Collect），带不带 GC 根各跑一遍，
+  AOT 和解释器都和 CoreCLR 逐行相同。
+
 ## 冷启动（0016–0018）
 
 第一次碰到类型 / 方法时的类型系统工作在无 JIT 的引擎上很贵，这三项去掉的是其中「查名字」的部分：
@@ -129,5 +145,6 @@ try / catch / finally / fault 都编，只有异常过滤器留给解释器。�
 ## 已知限制
 
 - GC 不扫原生栈：只在两次托管调用之间回收，一次调用里分配的东西会留到调用结束（宿主在调用之间触发 GC）；调用当中的 `GC.Collect` 只记下请求，下一次回收时执行（0022）。
+- `Array.CreateInstance` 带下界的一维数组 `Rank` 报 2，`Array.GetValue / SetValue` 对多维数组抛 ArgumentException（解释器和 AOT 一样，0019–0023 的用例里发现，没修）。
 - 编译选项：`LEANCLR_WASM_OPT`（Emscripten 优化参数，0006）、`LEANCLR_GC_DEBUG`（被回收的对象清零，漏登记的根会立刻出错）、
   `LEANCLR_ENABLE_PROFILE`（剖析构建，0010）；运行时环境变量 `LEANCLR_THROW_TRACE=1` 打印抛异常时的解释器调用栈（0003）。
