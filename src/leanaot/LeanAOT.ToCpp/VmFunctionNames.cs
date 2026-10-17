@@ -52,6 +52,9 @@ namespace LeanAOT.ToCpp
         public const string GetArrayElementAddress = "leanclr::codegen::get_array_element_address";
         public const string GetArrayElementDataAt = "leanclr::codegen::get_array_element_data_at";
         public const string SetArrayElementDataAt = "leanclr::codegen::set_array_element_data_at";
+        public const string GetSZArrayElementAddress = "leanclr::codegen::get_szarray_element_address";
+        public const string GetSZArrayElementDataAt = "leanclr::codegen::get_szarray_element_data_at";
+        public const string SetSZArrayElementDataAt = "leanclr::codegen::set_szarray_element_data_at";
         public const string GetMdArrayGlobalIndex = "leanclr::codegen::get_mdarray_global_index_from_indices";
         public const string NewDelegate = "leanclr::codegen::new_delegate";
         public const string GetFieldRvaData = "leanclr::codegen::get_field_rva_data";

@@ -3271,13 +3271,13 @@ namespace LeanAOT.ToCpp
                 EmitThrowRuntimeError(inst, "ArrayTypeMismatch");
                 _bodyWriter.DecreaseIndent();
                 _bodyWriter.AddLine("}");
-                string getElementAddressExpr = $"{VmFunctionNames.GetArrayElementAddress}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")})";
+                string getElementAddressExpr = $"{VmFunctionNames.GetSZArrayElementAddress}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")})";
                 _bodyWriter.AddLine($"{retTypeName} {GetEvalVariableName(retVar)} = {MayFoldCast($"{elementTypeName}*", retTypeName, getElementAddressExpr)};");
                 break;
             }
             default:
             {
-                string getElementAddressExpr = $"{VmFunctionNames.GetArrayElementAddress}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")})";
+                string getElementAddressExpr = $"{VmFunctionNames.GetSZArrayElementAddress}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")})";
                 _bodyWriter.AddLine($"{retTypeName} {GetEvalVariableName(retVar)} = {MayFoldCast($"{elementTypeName}*", retTypeName, getElementAddressExpr)};");
                 break;
             }
@@ -3293,7 +3293,7 @@ namespace LeanAOT.ToCpp
             EmitCheckArrayIndexOutOfRange(inst, arrayVar, indexVar, force: true);
             string elementTypeName = GetExactTypeName(elementType);
             string retTypeName = GetTypeName(retVar);
-            string getElementExpr = $"{VmFunctionNames.GetArrayElementDataAt}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")})";
+            string getElementExpr = $"{VmFunctionNames.GetSZArrayElementDataAt}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")})";
             _bodyWriter.AddLine($"{retTypeName} {GetEvalVariableName(retVar)} = {MayFoldCast(elementTypeName, retTypeName, getElementExpr)};");
         }
 
@@ -3305,7 +3305,7 @@ namespace LeanAOT.ToCpp
             EmitCheckNotNull(inst, arrayVar, force: true);
             EmitCheckArrayIndexOutOfRange(inst, arrayVar, indexVar, force: true);
             string elementTypeName = GetExactTypeName(elementType);
-            _bodyWriter.AddLine($"{VmFunctionNames.SetArrayElementDataAt}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")}, {GetVariableMayCast(valueVar, elementTypeName)});");
+            _bodyWriter.AddLine($"{VmFunctionNames.SetSZArrayElementDataAt}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")}, {GetVariableMayCast(valueVar, elementTypeName)});");
             EmitClearAotRoot(valueVar);
             EmitClearAotRoot(arrayVar);
         }
@@ -3341,7 +3341,7 @@ namespace LeanAOT.ToCpp
             _bodyWriter.AddLine("}");
 
             string elementTypeName = ConstStrings.ObjectPtrTypeName;
-            _bodyWriter.AddLine($"{VmFunctionNames.SetArrayElementDataAt}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")}, {GetVariableMayCast(valueVar, elementTypeName)});");
+            _bodyWriter.AddLine($"{VmFunctionNames.SetSZArrayElementDataAt}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")}, {GetVariableMayCast(valueVar, elementTypeName)});");
             EmitClearAotRoot(valueVar);
             EmitClearAotRoot(arrayVar);
         }
@@ -3362,7 +3362,7 @@ namespace LeanAOT.ToCpp
 
             string elementTypeName = GetExactTypeName(elementType);
             string retTypeName = GetTypeName(retVar);
-            string getElementExpr = $"{VmFunctionNames.GetArrayElementDataAt}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")})";
+            string getElementExpr = $"{VmFunctionNames.GetSZArrayElementDataAt}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")})";
             _bodyWriter.AddLine($"{retTypeName} {GetEvalVariableName(retVar)} = {MayFoldCast(elementTypeName, retTypeName, getElementExpr)};");
         }
 
@@ -3393,7 +3393,7 @@ namespace LeanAOT.ToCpp
             }
 
             string elementTypeName = GetExactTypeName(elementType);
-            _bodyWriter.AddLine($"{VmFunctionNames.SetArrayElementDataAt}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")}, {GetVariableMayCast(valueVar, elementTypeName)});");
+            _bodyWriter.AddLine($"{VmFunctionNames.SetSZArrayElementDataAt}<{elementTypeName}>({GetVariableMayCast(arrayVar, ConstStrings.ArrayPtrTypeName)}, {GetVariableMayCast(indexVar, "int32_t")}, {GetVariableMayCast(valueVar, elementTypeName)});");
             EmitClearAotRoot(valueVar);
             EmitClearAotRoot(arrayVar);
         }

@@ -317,9 +317,9 @@ namespace LeanAOT.ToCpp
             }
             if (typeName == "System.Runtime.InteropServices.MemoryMarshal" && name == "GetArrayDataReference" && gargs?.Count == 1 && ps.Count == 1 && retVar != null)
             {
-                // get_array_data_reference: NullReference for null, else the first element's address
+                // get_array_data_reference: NullReference for null, else the first element's address (T[] is a vector)
                 EmitCheckNotNull(inst, args[0], force: true);
-                Assign($"leanclr::codegen::get_array_element_data_start_as<uint8_t>((leanclr::vm::RtArray*)({A(0)}))");
+                Assign($"{VmFunctionNames.GetSZArrayElementAddress}<uint8_t>((leanclr::vm::RtArray*)({A(0)}), 0)");
                 return true;
             }
             return false;

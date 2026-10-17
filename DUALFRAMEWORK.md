@@ -38,6 +38,7 @@
 | 0017 AOT generic lookup prefilter | `007ae8e` | 冷启动：`find_aot_method_impl` 对每个膨胀的泛型方法都拼完整的实例化键再查。挂 AOT 模块时记下哪些泛型方法定义有编好的实例化，查找先看定义在不在、在才拼键 | 门槛 2：冷启动 |
 | 0018 TypeRef resolution cache | `b60b7b4` | 冷启动：TypeRef → TypeDef 每次都按名字到被引用的模块里查（System.Runtime 这类门面还要再经类型转发到 CoreLib）。每个模块按 rid 缓存解析成功的结果，失败不缓存 | 门槛 2：冷启动 |
 | 0019 AOT: Span members in place | — | `Span<T>` / `ReadOnlySpan<T>` 的下标、`Length`、`IsEmpty`、`Slice` 和 `MemoryMarshal.GetReference` 原地展开，见下文「热循环」 | 交通模拟测速：Span 写法比数组慢 3 倍 |
+| 0020 AOT: vector element access | — | `ldelem / stelem / ldelema` 直接从 `first_data` 算地址，不再每次经 `klass->by_val->ele_type` 判断有没有多维数组的边界 | 读 0019 之后生成的 C++ |
 
 「门槛」是框架阶段 0 的验收：1 = 每条命令的耗时，2 = 冷启动到第一局。每个提交的正文有更细的说明和测量。
 
@@ -106,6 +107,7 @@ try / catch / finally / fault 都编，只有异常过滤器留给解释器。�
 无 JIT 时 wasm 逐条解释，热循环里多一次读内存、多一次调用都直接算进时间。按一个交通模拟的测速（1000 辆车一步，Bun 关 JIT）一项项做：
 
 - 0019：`span[i]`、`Length`、`IsEmpty`、`Slice` 原来都是调用 CoreLib 的方法，每次一个元数据初始化检查、一次 `AotFrameScope`、一个带错误码的返回，Span 写法因此比数组还慢 3 倍。现在按 IL 方法体原地写成比较加地址计算，失败时抛的异常和 IL 一样（下标 IndexOutOfRange，Slice ArgumentOutOfRange，`Slice(start, length)` 用 64 位的判断）；`MemoryMarshal.GetReference(span)` 直接取 `_reference`。实例字段不是恰好 `_reference`、`_length` 的照旧调用。
+- 0020：IL 的 `ldelem / stelem / ldelema` 只接受一维、从零开始的数组（ECMA-335 III.4.7），数据从 `first_data` 开始。原来用的是兼顾多维数组的 `vm::Array` 版本，每次读写都要读 `klass->by_val->ele_type`；运行时用 `-fno-strict-aliasing` 编，循环里每写一次内存，这两次读都要重来。`MemoryMarshal.GetArrayDataReference(T[])` 也改用它。
 
 ## 冷启动（0016–0018）
 
