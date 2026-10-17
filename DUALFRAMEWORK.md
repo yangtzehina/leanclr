@@ -37,6 +37,7 @@
 | 0016 invoker name prefilter | `26869e6` | 冷启动：`Shim::get_invoker`（每个类初始化方法表、每个泛型方法膨胀都调）原来为 icall / intrinsic 查表把方法全名拼出来再按字符串查，碰到的每个方法都要拼，命中的只有 CoreLib 的少数几个。每张表加一个 `MethodNameFilter`（`utils/method_name_filter.h`），见下文「冷启动」 | 门槛 2：冷启动 |
 | 0017 AOT generic lookup prefilter | `007ae8e` | 冷启动：`find_aot_method_impl` 对每个膨胀的泛型方法都拼完整的实例化键再查。挂 AOT 模块时记下哪些泛型方法定义有编好的实例化，查找先看定义在不在、在才拼键 | 门槛 2：冷启动 |
 | 0018 TypeRef resolution cache | `b60b7b4` | 冷启动：TypeRef → TypeDef 每次都按名字到被引用的模块里查（System.Runtime 这类门面还要再经类型转发到 CoreLib）。每个模块按 rid 缓存解析成功的结果，失败不缓存 | 门槛 2：冷启动 |
+| 0019 AOT: Span members in place | — | `Span<T>` / `ReadOnlySpan<T>` 的下标、`Length`、`IsEmpty`、`Slice` 和 `MemoryMarshal.GetReference` 原地展开，见下文「热循环」 | 交通模拟测速：Span 写法比数组慢 3 倍 |
 
 「门槛」是框架阶段 0 的验收：1 = 每条命令的耗时，2 = 冷启动到第一局。每个提交的正文有更细的说明和测量。
 
@@ -99,6 +100,12 @@ try / catch / finally / fault 都编，只有异常过滤器留给解释器。�
 - 一致性：同一份 IL 在 CoreCLR、AOT（strict）和解释器上三份输出逐行相同（框架的 `runtime:aot:eh`），覆盖 catch 顺序 / 类型不匹配 /
   运行时错误 / 泛型 catch 类型、return 穿过三层 finally、goto 跳出嵌套 try、finally 里抛、rethrow、using / foreach / lock、
   AOT ↔ 解释器双向穿越、处理块里 GC。它也找出了解释器的 0015。
+
+### 热循环（0019–0021、0023）
+
+无 JIT 时 wasm 逐条解释，热循环里多一次读内存、多一次调用都直接算进时间。按一个交通模拟的测速（1000 辆车一步，Bun 关 JIT）一项项做：
+
+- 0019：`span[i]`、`Length`、`IsEmpty`、`Slice` 原来都是调用 CoreLib 的方法，每次一个元数据初始化检查、一次 `AotFrameScope`、一个带错误码的返回，Span 写法因此比数组还慢 3 倍。现在按 IL 方法体原地写成比较加地址计算，失败时抛的异常和 IL 一样（下标 IndexOutOfRange，Slice ArgumentOutOfRange，`Slice(start, length)` 用 64 位的判断）；`MemoryMarshal.GetReference(span)` 直接取 `_reference`。实例字段不是恰好 `_reference`、`_length` 的照旧调用。
 
 ## 冷启动（0016–0018）
 

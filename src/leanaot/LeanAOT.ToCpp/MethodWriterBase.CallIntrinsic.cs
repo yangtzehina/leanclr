@@ -133,6 +133,10 @@ namespace LeanAOT.ToCpp
                     EmitAssignOrThrow(inst, retVar, $"leanclr::codegen::type_is_value_type_cached((leanclr::vm::RtObject*)({A(0)}), {site})");
                     return true;
                 }
+                if ((typeName == "System.Span`1" || typeName == "System.ReadOnlySpan`1") && TryEmitSpanMember(inst, methodDetail, name, ps, args, retVar))
+                {
+                    return true;
+                }
                 return false;
             }
 
@@ -303,6 +307,14 @@ namespace LeanAOT.ToCpp
                 EmitAssignOrThrow(inst, retVar, $"leanclr::codegen::cached_type_predicate({site}, {predicate}, {methodVarNameProvider()})");
                 return true;
             }
+            if (typeName == "System.Runtime.InteropServices.MemoryMarshal" && name == "GetReference" && gargs?.Count == 1 && ps.Count == 1 && retVar != null
+                && args[0].type == EvalDataType.ValueType && ps[0].RemovePinnedAndModifiers() is GenericInstSig spanParam
+                && IsSpanLayout(spanParam.GenericType.TypeDefOrRef.ResolveTypeDef()))
+            {
+                // GetReference(Span<T>) / GetReference(ReadOnlySpan<T>): the span's _reference (layout as in TryEmitSpanMember)
+                Assign($"({A(0)}).__field_0");
+                return true;
+            }
             if (typeName == "System.Runtime.InteropServices.MemoryMarshal" && name == "GetArrayDataReference" && gargs?.Count == 1 && ps.Count == 1 && retVar != null)
             {
                 // get_array_data_reference: NullReference for null, else the first element's address
@@ -311,6 +323,94 @@ namespace LeanAOT.ToCpp
                 return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Span&lt;T&gt; / ReadOnlySpan&lt;T&gt;'s indexer, Length, IsEmpty and Slice written out in place. As calls, each one runs a
+        /// compiled method with a metadata-init check, an AotFrameScope and an RtResult return, which in interpreted wasm costs
+        /// several times the access itself: a loop over spans ran 3x slower than the same loop over arrays. The expressions are
+        /// the IL bodies; `this` is the span's address, null-checked at the call like any instance call, and a failed check
+        /// raises the exception type the IL throws (IndexOutOfRange from the indexer, ArgumentOutOfRange from Slice).
+        /// </summary>
+        private bool TryEmitSpanMember(Instruction inst, MethodDetail methodDetail, string name, IList<TypeSig> ps, List<EvalVariable> args, EvalVariable retVar)
+        {
+            if (retVar == null || !IsSpanLayout(methodDetail.MethodDef.DeclaringType)
+                || !(methodDetail.Method.DeclaringType.ToTypeSig() is GenericInstSig spanSig) || spanSig.GenericArguments.Count != 1
+                || !TryGetElementSizeExpr(spanSig.GenericArguments[0], out string elementSize))
+            {
+                return false;
+            }
+            bool IsI4(TypeSig t) => t.RemovePinnedAndModifiers().ElementType == ElementType.I4;
+            _forwardDeclaration.AddTypeForwardDefine(spanSig);
+            string span = $"(({GetExactTypeName(spanSig)}*)({GetEvalVariableName(args[0])}))";
+            string ret = GetEvalVariableName(retVar);
+            string retType = GetTypeName(retVar);
+            void ThrowIf(string cond, string err)
+            {
+                _bodyWriter.AddLine($"if ({GetUnlikelyExpr(cond)})");
+                _bodyWriter.AddLine("{");
+                _bodyWriter.IncreaseIndent();
+                EmitThrowRuntimeError(inst, err);
+                _bodyWriter.DecreaseIndent();
+                _bodyWriter.AddLine("}");
+            }
+            string ElementAt(string index) => $"(uint8_t*)({span}->__field_0) + (intptr_t)(uint32_t)({index}) * (intptr_t){elementSize}";
+            switch (name)
+            {
+            case "get_Length":
+            case "get_IsEmpty":
+                if (ps.Count != 0)
+                {
+                    return false;
+                }
+                _bodyWriter.AddLine($"{ret} = ({retType})({span}->__field_1{(name == "get_IsEmpty" ? " == 0" : "")});");
+                return true;
+            case "get_Item":
+            {
+                // if ((uint)index >= (uint)_length) ThrowIndexOutOfRange(); return ref Unsafe.Add(ref _reference, (nint)(uint)index)
+                if (ps.Count != 1 || !IsI4(ps[0]))
+                {
+                    return false;
+                }
+                string index = GetVariableMayCast(args[1], "int32_t");
+                ThrowIf($"(uint32_t)({index}) >= (uint32_t)({span}->__field_1)", "IndexOutOfRange");
+                _bodyWriter.AddLine($"{ret} = ({retType})({ElementAt(index)});");
+                EmitSyncAotRoot(retVar);
+                return true;
+            }
+            case "Slice":
+            {
+                // Slice(start): (uint)start > (uint)_length throws; Slice(start, length): (ulong)(uint)start + (ulong)(uint)length >
+                // (ulong)(uint)_length throws (the 64-bit form of the check; the 32-bit form accepts the same arguments)
+                if (retVar.type != EvalDataType.ValueType || ps.Count < 1 || ps.Count > 2 || !ps.All(IsI4))
+                {
+                    return false;
+                }
+                string start = GetVariableMayCast(args[1], "int32_t");
+                string length = ps.Count == 2 ? GetVariableMayCast(args[2], "int32_t") : null;
+                ThrowIf(length == null ? $"(uint32_t)({start}) > (uint32_t)({span}->__field_1)"
+                    : $"(uint64_t)(uint32_t)({start}) + (uint64_t)(uint32_t)({length}) > (uint64_t)(uint32_t)({span}->__field_1)", "ArgumentOutOfRange");
+                _bodyWriter.AddLine($"{ret} = {{}};");
+                _bodyWriter.AddLine($"{ret}.__field_0 = (decltype({ret}.__field_0))({ElementAt(start)});");
+                _bodyWriter.AddLine($"{ret}.__field_1 = {(length == null ? $"{span}->__field_1 - ({start})" : $"({length})")};");
+                return true;
+            }
+            default:
+                return false;
+            }
+        }
+
+        /// <summary>The fields the Span intrinsics read: __field_0 = ref T _reference, __field_1 = int _length (the layout the
+        /// Span constructor intrinsics write). Anything else keeps the calls.</summary>
+        private static bool IsSpanLayout(TypeDef spanDef)
+        {
+            if (spanDef == null)
+            {
+                return false;
+            }
+            List<FieldDef> fields = spanDef.Fields.Where(f => !f.IsStatic).ToList();
+            return fields.Count == 2 && fields[0].Name == "_reference" && fields[0].FieldType.RemovePinnedAndModifiers().ElementType == ElementType.ByRef
+                && fields[1].Name == "_length" && fields[1].FieldType.RemovePinnedAndModifiers().ElementType == ElementType.I4;
         }
 
         /// <summary>sizeof(T) as the runtime counts it (get_first_generic_arg_size): a reference for a reference type, the
