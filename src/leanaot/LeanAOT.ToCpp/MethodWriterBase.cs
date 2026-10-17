@@ -762,7 +762,7 @@ namespace LeanAOT.ToCpp
 
         private void RegisterAotRoot(EvalVariable var)
         {
-            if (var.type != EvalDataType.Ref)
+            if (var.type != EvalDataType.Ref || _globalConfig.OmitGcRoots)
             {
                 return;
             }
