@@ -8,5 +8,7 @@ namespace leanclr
 namespace gc
 {
 
+bool GarbageCollector::s_collect_requested = false;
+
 } // namespace gc
 } // namespace leanclr

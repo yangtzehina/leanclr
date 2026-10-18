@@ -64,6 +64,13 @@ namespace LeanAOT.ToCpp
         public bool EnableProfileInstrumentation { get; set; }
 
         /// <summary>
+        /// LeanAOT-only (--leanaot-no-gc-roots): no <c>__leanclr_aot_roots</c> slots; object references live only in C++ locals.
+        /// Nothing scans them then: valid because the runtime collects only between calls (vm::GC::collect turns GC.Collect
+        /// made while managed frames are on the stack into a request for the next collection between calls).
+        /// </summary>
+        public bool OmitGcRoots { get; set; }
+
+        /// <summary>
         /// LeanAOT-only: paths to <c>aot.xml</c> rule files (CLI order). Empty when unset.
         /// </summary>
         public List<string> AotMethodRuleFiles { get; set; } = new List<string>();

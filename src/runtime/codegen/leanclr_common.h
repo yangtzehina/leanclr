@@ -891,6 +891,27 @@ inline void set_array_element_data_at(vm::RtArray* array, int32_t index, T value
     vm::Array::set_array_data_at<T>(array, index, value);
 }
 
+// IL ldelem / stelem / ldelema only take vectors (single-dimension, zero-based: ECMA-335 III.4.7), whose data starts at
+// first_data. The vm::Array versions above also serve MD arrays and read klass->by_val->ele_type on every access to
+// find the bounds; without strict aliasing every store in a loop forces those two loads again.
+template <typename T>
+inline T* get_szarray_element_address(vm::RtArray* array, int32_t index) noexcept
+{
+    return reinterpret_cast<T*>(&array->first_data) + static_cast<size_t>(index);
+}
+
+template <typename T>
+inline T get_szarray_element_data_at(vm::RtArray* array, int32_t index) noexcept
+{
+    return *get_szarray_element_address<T>(array, index);
+}
+
+template <typename T>
+inline void set_szarray_element_data_at(vm::RtArray* array, int32_t index, T value) noexcept
+{
+    *get_szarray_element_address<T>(array, index) = value;
+}
+
 inline RtResult<int32_t> get_mdarray_global_index_from_indices(vm::RtArray* arr, int32_t* indices) noexcept
 {
     return vm::Array::get_mdarray_global_index_from_indices3(arr, indices);

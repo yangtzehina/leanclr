@@ -128,6 +128,9 @@ internal class Program
         [Option("leanaot-no-generics", Required = false, HelpText = "LeanAOT-only: do not compile generic instantiations.")]
         public bool NoGenerics { get; set; }
 
+        [Option("leanaot-no-gc-roots", Required = false, HelpText = "LeanAOT-only: keep object references only in C++ locals, without the per-method GC root slots (default: keep them). Valid because the runtime collects only between calls (GC.Collect inside a call is a request for the next collection).")]
+        public bool NoGcRoots { get; set; }
+
         [Option("leanaot-no-exception-handlers", Required = false, HelpText = "LeanAOT-only: leave every method with try/catch/finally/fault interpreted (default: compile them; filter clauses always stay interpreted).")]
         public bool NoExceptionHandlers { get; set; }
 
@@ -588,6 +591,7 @@ internal class Program
         config.CompilerFlags = NormalizeCompilerFlags(options.CompilerFlags);
         config.EnableLayoutValidation = options.LeanAotEnableLayoutValidation;
         config.EnableProfileInstrumentation = options.LeanAotEnablePgoProfile;
+        config.OmitGcRoots = options.NoGcRoots;
         if (options.LeanAotEnableLayoutValidation)
         {
             s_logger.Info("LeanAOT layout validation enabled (--leanaot-enable-layout-validation).");
