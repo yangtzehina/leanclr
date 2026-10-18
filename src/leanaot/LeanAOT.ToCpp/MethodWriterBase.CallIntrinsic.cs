@@ -424,7 +424,17 @@ namespace LeanAOT.ToCpp
                 expr = null;
                 return false;
             }
-            expr = MetaUtil.IsValueType(t) ? $"sizeof({TypeNameService.GetDirectlyCppTypeName(t)})" : "sizeof(void*)";
+            if (MetaUtil.IsValueType(t))
+            {
+                // sizeof needs the struct's definition in this part of the C++: Unsafe.Add<T>'s ref T parameter only
+                // forward-declares T, and Unsafe.SizeOf<T> has no T in its signature at all
+                _forwardDeclaration.AddTypeForwardDefine(t);
+                expr = $"sizeof({TypeNameService.GetDirectlyCppTypeName(t)})";
+            }
+            else
+            {
+                expr = "sizeof(void*)";
+            }
             return true;
         }
 
