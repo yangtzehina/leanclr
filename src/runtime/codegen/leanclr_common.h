@@ -704,6 +704,12 @@ inline RtResultVoid virtual_invoke_without_run_class_static_constructor_with_var
     }
     DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(const metadata::RtMethodInfo*, actual_method,
                                             vm::Method::get_virtual_method_impl(arg_buff[0].obj, method));
+    // arg_buff[0] is the box (a callvirt's this); the interpreter takes a value type's this as the address of its data,
+    // as fn_interpreter_invoker passes it on the path without varargs
+    if (vm::Method::is_instance(actual_method) && vm::Class::is_value_type(actual_method->parent))
+    {
+        arg_buff[0].obj = arg_buff[0].obj + 1;
+    }
     return invoke_interpreter_with_varargs(actual_method, arg_buff, ret_buff, vararg_count);
 }
 
