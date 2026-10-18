@@ -2103,7 +2103,10 @@ namespace LeanAOT.ToCpp
             var inflatedTypeSig = _method.InflateType(type.ToTypeSig());
             var retVar = PushStack(inflatedTypeSig);
             string typeName = GetExactTypeName(inflatedTypeSig);
-            _bodyWriter.AddLine($"{typeName} {GetEvalVariableName(retVar)} = *({typeName}*){GetEvalVariableName(addressVar)};");
+            // declared as the eval stack type like every other push: `ldobj T` over a class gives an object reference, so the
+            // call bridges and stelem's covariance check that take it see leanclr::vm::RtObject*, not the class's struct
+            string retTypeName = GetTypeName(retVar);
+            _bodyWriter.AddLine($"{retTypeName} {GetEvalVariableName(retVar)} = {MayFoldCast(typeName, retTypeName, $"*({typeName}*){GetEvalVariableName(addressVar)}")};");
         }
 
         private void EmitStObj(Instruction inst, ITypeDefOrRef type)

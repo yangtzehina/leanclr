@@ -42,6 +42,7 @@
 | 0021 AOT: cached array lengths | `1f77179` | 地址没被取过的数组局部变量和参数，长度存进旁边的 `int32_t`，越界检查和 `ldlen` 读它 | 在生成的 C++ 上逐项去掉检查测份量：越界检查占局部变量写法的 20% |
 | 0022 GC.Collect between calls | `dae6627` | 有托管帧在栈上时 `GC.Collect` 只记下请求，下一次调用之间的回收（`maybe_collect` / `collect`）执行 | 0019–0021 的一致性用例：调用中途回收时，解释器丢了调用方求值栈上的临时对象（段错误），只被 Span 指着的数组被回收 |
 | 0023 AOT without GC roots | `483dbf3` | LeanAOT `--leanaot-no-gc-roots`：不生成每个方法的 GC 根槽，引用只放在 C++ 局部变量里，见下文「热循环」 | 0021 之后再拆：GC 根的写入占局部变量写法的 21% |
+| 0024 ldobj T over a class | — | `ldobj` 的结果按求值栈的类型声明，和 `ldind` 一样：引用是 `RtObject*`，不再是类自己的结构体指针（小整数扩成 int32，无符号的按有符号存） | 泛型里读 `in T`（T 是类）：friflo 的 `StackArray<T>.Push` 的数组协变检查取不到 `klass`，`Func<T,…>.Invoke`、`EqualityComparer<T>.Equals` 的调用桥不收类的结构体指针，生成的 C++ 编不过 |
 
 「门槛」是框架阶段 0 的验收：1 = 每条命令的耗时，2 = 冷启动到第一局。每个提交的正文有更细的说明和测量。
 
