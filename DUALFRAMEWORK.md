@@ -43,7 +43,7 @@
 | 0022 GC.Collect between calls | `dae6627` | 有托管帧在栈上时 `GC.Collect` 只记下请求，下一次调用之间的回收（`maybe_collect` / `collect`）执行 | 0019–0021 的一致性用例：调用中途回收时，解释器丢了调用方求值栈上的临时对象（段错误），只被 Span 指着的数组被回收 |
 | 0023 AOT without GC roots | `483dbf3` | LeanAOT `--leanaot-no-gc-roots`：不生成每个方法的 GC 根槽，引用只放在 C++ 局部变量里，见下文「热循环」 | 0021 之后再拆：GC 根的写入占局部变量写法的 21% |
 | 0024 ldobj T over a class | `cab383a` | `ldobj` 的结果按求值栈的类型声明，和 `ldind` 一样：引用是 `RtObject*`，不再是类自己的结构体指针（小整数扩成 int32，无符号的按有符号存） | 泛型里读 `in T`（T 是类）：friflo 的 `StackArray<T>.Push` 的数组协变检查取不到 `klass`，`Func<T,…>.Invoke`、`EqualityComparer<T>.Equals` 的调用桥不收类的结构体指针，生成的 C++ 编不过 |
-| 0025 boxed this into the interpreter | — | 编译代码经 callvirt 调一个解释执行的值类型实例方法（接口方法、结构体的虚方法）时，直接调用桥先把箱子跳过对象头再交给虚调用的 invoker，invoker（`fn_interpreter_invoker`）又跳一次：方法读写的是箱子后面一个对象头处的字段。桥现在原样交箱子，和编译过的那一支（`virtual_method_ptr`）一样；带 varargs 的那条路解析出实现后自己跳过对象头 | 游戏的规则核心 AOT 跑第一条命令就抛 NullReferenceException：ET 的 `foreach` 遍历 `IReadOnlyList<SystemObject>`，`List<SystemObject>.Enumerator.MoveNext` 没编、走解释器，读到的 `_list` 是空。解释执行逐条和 .NET 一致 |
+| 0025 boxed this into the interpreter | `00c9f7a` | 编译代码经 callvirt 调一个解释执行的值类型实例方法（接口方法、结构体的虚方法）时，直接调用桥先把箱子跳过对象头再交给虚调用的 invoker，invoker（`fn_interpreter_invoker`）又跳一次：方法读写的是箱子后面一个对象头处的字段。桥现在原样交箱子，和编译过的那一支（`virtual_method_ptr`）一样；带 varargs 的那条路解析出实现后自己跳过对象头 | 游戏的规则核心 AOT 跑第一条命令就抛 NullReferenceException：ET 的 `foreach` 遍历 `IReadOnlyList<SystemObject>`，`List<SystemObject>.Enumerator.MoveNext` 没编、走解释器，读到的 `_list` 是空。解释执行逐条和 .NET 一致 |
 
 「门槛」是框架阶段 0 的验收：1 = 每条命令的耗时，2 = 冷启动到第一局。每个提交的正文有更细的说明和测量。
 
