@@ -92,19 +92,13 @@ namespace LeanAOT.ToCpp
                 _directCallBridgeImplWriter.AddLine($"constexpr size_t ARGS_SIZE = ARG{paramCount - 1}_OFFSET + {VmFunctionNames.GetStackObjectSizeForType}<{MethodGenerationUtil.GetAbiRelaxedTypeName(methodDetail.ParamsIncludeThis.Last().Type)}>();");
                 argsStr = "__argsBuf";
                 _directCallBridgeImplWriter.AddLine($"{ConstStrings.StackObjectTypeName} {argsStr}[ARGS_SIZE];");
-                if (!methodDetail.IsStatic)
-                {
-                    _directCallBridgeImplWriter.AddLine($"void* __this_for_interp = {parametersIncludeThis[0].Name};");
-                    _directCallBridgeImplWriter.AddLine($"if ({callvirVarName} && leanclr::vm::Method::is_instance({methodVarName}) && leanclr::vm::Class::is_value_type({methodVarName}->parent))");
-                    _directCallBridgeImplWriter.BeginBlock();
-                    _directCallBridgeImplWriter.AddLine($"__this_for_interp = const_cast<void*>(leanclr::vm::Object::get_box_value_type_data_ptr((leanclr::vm::RtObject*){parametersIncludeThis[0].Name}));");
-                    _directCallBridgeImplWriter.EndBlock();
-                }
+                // With __callvir a value type's this is the box, as in the compiled branch above (virtual_method_ptr): the
+                // virtual invokers step over the object header themselves (the interpreter's in fn_interpreter_invoker), so
+                // it goes in unchanged. Passing the data pointer here unboxed it twice.
                 foreach (var param in parametersIncludeThis)
                 {
                     int paramIndex = param.Index;
-                    string argName = !methodDetail.IsStatic && paramIndex == 0 ? "__this_for_interp" : param.Name;
-                    _directCallBridgeImplWriter.AddLine($"{VmFunctionNames.ExpandArgumentToEvalStack}({argName}, {argsStr} + ARG{paramIndex}_OFFSET);");
+                    _directCallBridgeImplWriter.AddLine($"{VmFunctionNames.ExpandArgumentToEvalStack}({param.Name}, {argsStr} + ARG{paramIndex}_OFFSET);");
                 }
             }
             string retStr;
